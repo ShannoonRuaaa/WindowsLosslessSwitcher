@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional intro replay after a live format change, with recording and timeline
+  confirmation before using Apple Music's seek or Previous controls.
+
 ### Fixed
+
+- Keep playback audible during format lookup and unchanged-format transitions;
+  defer device changes while paused and release coordinator-owned pauses on shutdown.
+- Sample audio-session activity and peak together and check fast endpoint changes
+  earlier while retaining the existing slow-driver verification budget.
 
 - A track Apple Music never started is now retried once in place (pause,
   longer settle, play) before the app skips it, so songs that just needed a

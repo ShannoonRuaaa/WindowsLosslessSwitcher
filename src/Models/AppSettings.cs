@@ -29,6 +29,9 @@ public sealed class AppSettings
 
     public bool SwitchBitDepth { get; set; } = true;
 
+    /// <summary>Restart the same recording at 0:00 after a live format switch.</summary>
+    public bool RewindAfterFormatSwitch { get; set; } = true;
+
     public bool PreferClosestSampleRateMultiple { get; set; }
 
     /// <summary>

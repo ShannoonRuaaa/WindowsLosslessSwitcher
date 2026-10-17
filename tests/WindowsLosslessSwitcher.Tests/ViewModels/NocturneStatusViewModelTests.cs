@@ -73,7 +73,7 @@ public sealed class NocturneStatusViewModelTests
     public void BuildPhaseText_UsesDesignCopy()
     {
         Assert.Equal(
-            "Track change — output muted",
+            "Detecting track format…",
             MainWindowViewModel.BuildPhaseText(SwitchPhase.Detecting, Status("Resolver: Detecting track")));
         Assert.Equal(
             "No switch needed — format already matches",

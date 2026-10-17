@@ -87,6 +87,19 @@
               Style="{StaticResource Nocturne.Button.Ghost}" />
     </StackPanel>
 
+    <Grid Margin="0,20,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" />
+        <ColumnDefinition Width="Auto" />
+      </Grid.ColumnDefinitions>
+      <StackPanel Margin="0,0,12,0">
+        <TextBlock Text="Replay the intro after a format change" TextWrapping="Wrap" />
+        <TextBlock Margin="0,4,0,0" Text="Restart the same track at 0:00 once its audio stream is ready." TextWrapping="Wrap" />
+      </StackPanel>
+      <ToggleButton Grid.Column="1" IsChecked="{Binding RewindAfterFormatSwitch}"
+                    AutomationProperties.Name="Replay the intro after a format change"
+                    Style="{StaticResource Nocturne.ToggleSwitch}" />
+    </Grid>
     <Control Margin="0,20,0,0" Style="{StaticResource Nocturne.Divider}" />
 
     <StackPanel Margin="0,8,0,0">

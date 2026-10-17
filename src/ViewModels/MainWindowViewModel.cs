@@ -19,6 +19,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private string? _selectedDeviceId;
     private bool _launchAtLogin;
     private bool _switchBitDepth;
+    private bool _rewindAfterFormatSwitch = true;
     private bool _preferClosestSampleRateMultiple;
     private int _defaultBitDepth = 24;
     private bool _enableSwitchToasts;
@@ -191,6 +192,12 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     {
         get => _defaultBitDepth;
         set => SetField(ref _defaultBitDepth, AppSettings.NormalizeBitDepth(value));
+    }
+
+    public bool RewindAfterFormatSwitch
+    {
+        get => _rewindAfterFormatSwitch;
+        set => SetField(ref _rewindAfterFormatSwitch, value);
     }
 
     public bool PreferClosestSampleRateMultiple
@@ -641,6 +648,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             "Resolver: Waiting for Apple Music" or "Resolver: Starting" or "Resolver: Idle" => SwitchPhase.Idle,
             "Resolver: Detecting track" => SwitchPhase.Detecting,
+            "Resolver: Deferred until playback" => SwitchPhase.Idle,
             "Resolver: Resolving format" => SwitchPhase.Resolving,
             "Resolver: Error" or "Resolver: Failed" or "Resolver: No target device" => SwitchPhase.Failed,
             _ when text.StartsWith("Resolver: ", StringComparison.Ordinal) =>
@@ -653,8 +661,9 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     internal static string BuildPhaseText(SwitchPhase phase, Services.SwitchingStatus status) => phase switch
     {
+        SwitchPhase.Idle when status.ResolverStatusText == "Resolver: Deferred until playback" => "Paused — format change will apply on resume",
         SwitchPhase.Idle => "Watching Apple Music media session",
-        SwitchPhase.Detecting => "Track change — output muted",
+        SwitchPhase.Detecting => "Detecting track format…",
         SwitchPhase.Resolving => "Matching in Apple Music catalog…",
         SwitchPhase.Switching when status.ResolverStatusText.Contains("Restarting Apple Music", StringComparison.Ordinal) =>
             "Restarting Apple Music…",

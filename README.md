@@ -22,12 +22,17 @@ The app lives in the system tray and stays out of the way. It is an independent 
 - Automatic sample-rate and optional bit-depth switching for Apple Music for Windows
 - Exact format matching against the Apple Music catalog; local files are matched to their actual file format
 - Follows the Windows default playback device, or pins a specific device
-- Mutes instantly on a track change so nothing plays at the old format, switches the device live under Apple Music's running audio stream, and unmutes once the rebuilt pipeline produces real audio — no pops, no wrong-format playback, no pause/resume games, and song endings play in full
+- Keeps playback audible during format lookup and unchanged-format transitions, mutes live device changes, and optionally replays the intro once the renderer is ready
 - Verifies audio is actually flowing after every switch, with automatic recovery if Apple Music's player stalls
 - Optional popup toast when a new format is applied
 - Tray-first UI with current format display, diagnostics export, and update checks
 - Installer with in-app updates, or a portable package if you prefer no installer
 
+### Replaying an intro after a format change
+
+Under **Settings > Switching**, **Replay the intro after a format change** restarts the same recording at 0:00 after a live device-format change. It defaults to on; turn it off to keep the current timeline position. Tracks that already match the device format continue without a restart or mute. Format changes detected while paused wait until playback resumes.
+
+Apple Music can acknowledge a seek without moving. The restart confirms both recording identity and timeline position. If seeking is unavailable or ineffective, one Previous command is allowed only while the same recording is paused and at least five seconds in. If a safe restart cannot be confirmed, playback resumes at its current position. Radio/autoplay sessions may disable both commands. The beginning can play briefly at the previous device format while the new format is being resolved.
 ## Installation
 
 1. Go to the [latest release](https://github.com/jordanmgibson/WindowsLosslessSwitcher/releases/latest).
