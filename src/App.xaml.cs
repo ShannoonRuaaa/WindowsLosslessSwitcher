@@ -45,12 +45,15 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        AccessibleTheme.Apply(Resources, SystemParameters.HighContrast, AccessibleTheme.UseLightTheme);
+        SystemParameters.StaticPropertyChanged += OnSystemAppearanceChanged;
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
         var launchMinimized = e.Args.Any(arg => string.Equals(arg, "--minimized", StringComparison.OrdinalIgnoreCase));
 
         if (!_instanceGuard.TryAcquire())
         {
             _logger.Warn("Startup ownership: duplicate instance rejected.");
-            if (!launchMinimized)
+            if (!launchMinimized && !_instanceGuard.RequestActivation())
             {
                 System.Windows.MessageBox.Show(
                     "Windows Lossless Switcher is already running.",
@@ -64,6 +67,7 @@ public partial class App : Application
         }
 
         _logger.Info("Startup ownership: primary instance.");
+        _instanceGuard.ActivationRequested += OnActivationRequested;
         _logger.Info($"OS version: {Environment.OSVersion.Version} ({(Environment.Is64BitOperatingSystem ? "64-bit" : "32-bit")}, {System.Runtime.InteropServices.RuntimeInformation.OSArchitecture}).");
 
         _settings = _settingsService.Load();
@@ -198,8 +202,25 @@ public partial class App : Application
         _viewModel.OpenSettingsWindowRequested -= ShowSettingsWindow;
         _viewModel.SaveNativeFormatCorrectionRequested -= OnSaveNativeFormatCorrection;
         _viewModel.RemoveNativeFormatCorrectionRequested -= OnRemoveNativeFormatCorrection;
+        SystemParameters.StaticPropertyChanged -= OnSystemAppearanceChanged;
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+        _instanceGuard.ActivationRequested -= OnActivationRequested;
         _instanceGuard.Dispose();
         base.OnExit(e);
+    }
+
+    private void OnActivationRequested(object? sender, EventArgs e) => Dispatcher.BeginInvoke(ShowMainWindow);
+
+    private void OnSystemAppearanceChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SystemParameters.HighContrast))
+            Dispatcher.BeginInvoke(() => AccessibleTheme.Apply(Resources, SystemParameters.HighContrast, AccessibleTheme.UseLightTheme));
+    }
+
+    private void OnUserPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs args)
+    {
+        if (!Dispatcher.HasShutdownStarted)
+            Dispatcher.BeginInvoke(() => AccessibleTheme.Apply(Resources, SystemParameters.HighContrast, AccessibleTheme.UseLightTheme));
     }
 
     private void OnCoordinatorStatusChanged(object? sender, SwitchingStatus status)

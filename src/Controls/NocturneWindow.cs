@@ -17,6 +17,7 @@ public class NocturneWindow : Window
     public NocturneWindow()
     {
         WindowStyle = WindowStyle.None;
+        FontSize = 14;
         SnapsToDevicePixels = true;
         UseLayoutRounding = true;
         _chrome = new WindowChrome
@@ -42,6 +43,9 @@ public class NocturneWindow : Window
 
     protected void MinimizeButton_OnClick(object sender, RoutedEventArgs e) =>
         WindowState = WindowState.Minimized;
+
+    protected void MaximizeRestoreButton_OnClick(object sender, RoutedEventArgs e) =>
+        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
     protected void CloseButton_OnClick(object sender, RoutedEventArgs e) => Close();
 }

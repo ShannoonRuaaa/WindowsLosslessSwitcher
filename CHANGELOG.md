@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Isolated WPF verification for settings bindings, compact layouts, keyboard-focus
+  resource resolution, and light/dark/contrast palettes, included in CI.
 - Per-recording native format corrections that override web catalog/cache results
   for the matching title, artist, and album, with save/apply and removal controls.
 - Optional intro replay after a live format change, with recording and timeline
@@ -43,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Refresh Windows controls with system typography, readable labels, wrapping settings
+  rows, system appearance/contrast support, and a resizable Settings window.
+- Ctrl+, opens Settings; reopening the app activates its existing main window.
 - The tray flyout's track title and artist line scroll (marquee) when they
   are too long to fit, instead of being cut off with an ellipsis.
 - Local files no longer hit the Apple Music catalog on every play. A track
