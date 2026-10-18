@@ -6,6 +6,7 @@
   <UserControl.Resources>
     <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
     <converters:EqualityToBoolConverter x:Key="EqualityToBool" />
+    <converters:SampleRateLabelConverter x:Key="RateLabel" />
   </UserControl.Resources>
   <StackPanel>
     <TextBlock FontSize="{StaticResource Nocturne.FontSize.Heading}"
@@ -181,6 +182,31 @@
       </Grid>
     </StackPanel>
 
+    <Border Margin="0,20,0,0" Padding="16" Background="{StaticResource Nocturne.Brush.Surface}">
+      <StackPanel>
+        <TextBlock Text="Native format correction" FontWeight="SemiBold" />
+        <TextBlock Margin="0,8,0,0" Text="{Binding CurrentTrackText}" TextWrapping="Wrap" />
+        <TextBlock Margin="0,8,0,0" Text="If Apple Music’s Lossless details show a different format, save it for this recording and album. Other tracks stay automatic." TextWrapping="Wrap" />
+        <WrapPanel Margin="0,12,0,0">
+          <StackPanel Margin="0,0,16,8">
+            <Label Content="Sample rate" Target="{Binding ElementName=NativeRate}" />
+            <ComboBox x:Name="NativeRate" MinWidth="150" ItemsSource="{Binding NativeSampleRateOptions}" SelectedItem="{Binding NativeSampleRateHz}" AutomationProperties.Name="Native sample rate">
+              <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Converter={StaticResource RateLabel}}" /></DataTemplate></ComboBox.ItemTemplate>
+            </ComboBox>
+          </StackPanel>
+          <StackPanel Margin="0,0,0,8">
+            <Label Content="Bit depth" Target="{Binding ElementName=NativeDepth}" />
+            <ComboBox x:Name="NativeDepth" MinWidth="120" ItemsSource="{Binding NativeBitDepthOptions}" SelectedItem="{Binding NativeBitDepth}" AutomationProperties.Name="Native bit depth">
+              <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding StringFormat={}{0}-bit}" /></DataTemplate></ComboBox.ItemTemplate>
+            </ComboBox>
+          </StackPanel>
+        </WrapPanel>
+        <WrapPanel Margin="0,8,0,0">
+          <Button Margin="0,0,8,8" Content="Save and apply" Command="{Binding SaveNativeFormatCorrectionCommand}" Style="{StaticResource Nocturne.Button.Primary}" />
+          <Button Margin="0,0,0,8" Content="Remove correction" Command="{Binding RemoveNativeFormatCorrectionCommand}" Style="{StaticResource Nocturne.Button.Ghost}" />
+        </WrapPanel>
+      </StackPanel>
+    </Border>
     <TextBlock Margin="0,10,0,0"
                controls:Tracking.Text="ALLOWED HARDWARE FORMATS"
                Style="{StaticResource Nocturne.Kicker}" />

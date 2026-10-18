@@ -33,6 +33,9 @@ The app lives in the system tray and stays out of the way. It is an independent 
 Under **Settings > Switching**, **Replay the intro after a format change** restarts the same recording at 0:00 after a live device-format change. It defaults to on; turn it off to keep the current timeline position. Tracks that already match the device format continue without a restart or mute. Format changes detected while paused wait until playback resumes.
 
 Apple Music can acknowledge a seek without moving. The restart confirms both recording identity and timeline position. If seeking is unavailable or ineffective, one Previous command is allowed only while the same recording is paused and at least five seconds in. If a safe restart cannot be confirmed, playback resumes at its current position. Radio/autoplay sessions may disable both commands. The beginning can play briefly at the previous device format while the new format is being resolved.
+### Native format corrections
+
+The public Apple Music catalog can report a different format from the Windows player's Lossless details. In **Settings > Switching > Native format correction**, select the sample rate and bit depth shown by Apple Music, then choose **Save and apply**. The saved correction overrides catalog/cache results only for the matching title, artist, and album. **Remove correction** restores automatic resolution. This requires a user-verified format; the app does not inspect the native Apple Music stream.
 ## Installation
 
 1. Go to the [latest release](https://github.com/jordanmgibson/WindowsLosslessSwitcher/releases/latest).

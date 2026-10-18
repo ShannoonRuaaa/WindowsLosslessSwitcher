@@ -20,6 +20,7 @@ public sealed class AppSettings
     private int _formatCacheRefreshDays = 30;
     private List<int> _allowedSampleRates = [];
     private List<int> _allowedBitDepths = [];
+    private List<TrackFormatCorrection> _trackFormatCorrections = [];
 
     public DeviceSelectionMode DeviceSelectionMode { get; set; } = DeviceSelectionMode.FollowDefault;
 
@@ -29,8 +30,18 @@ public sealed class AppSettings
 
     public bool SwitchBitDepth { get; set; } = true;
 
-    /// <summary>Restart the same recording at 0:00 after a live format switch.</summary>
+    /// <summary>
+    /// After a live format switch has rebuilt the renderer, seek to the beginning before
+    /// resuming audibly. Tracks that need no switch and watchdog recoveries keep their position.
+    /// </summary>
     public bool RewindAfterFormatSwitch { get; set; } = true;
+
+    /// <summary>Native player corrections take priority over catalog/cache results.</summary>
+    public List<TrackFormatCorrection> TrackFormatCorrections
+    {
+        get => _trackFormatCorrections;
+        set => _trackFormatCorrections = value ?? [];
+    }
 
     public bool PreferClosestSampleRateMultiple { get; set; }
 

@@ -370,6 +370,9 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
         Settings = settings;
     }
 
+    /// <summary>Re-evaluates the current track after a native-format correction is saved.</summary>
+    public void ReprocessTrack(TrackSnapshot track) => OnTrackChanged(this, track);
+
     public async ValueTask DisposeAsync()
     {
         _trackSource.TrackChanged -= OnTrackChanged;
@@ -1828,8 +1831,17 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
         PublishStatus(status);
     }
 
-    private Task<ResolvedAudioFormat?> ResolveFormatAsync(TrackSnapshot track, CancellationToken cancellationToken) =>
-        _resolverChain.ResolveAsync(track, cancellationToken);
+    private Task<ResolvedAudioFormat?> ResolveFormatAsync(TrackSnapshot track, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var correction = TrackFormatCorrection.Resolve(Settings.TrackFormatCorrections, track);
+        if (correction is not null)
+        {
+            _logger.Info($"Using user-verified native format for '{track.Title}': {correction.BitDepth}/{correction.SampleRateHz}; bypassing the web catalog/cache.");
+            return Task.FromResult<ResolvedAudioFormat?>(correction);
+        }
+        return _resolverChain.ResolveAsync(track, cancellationToken);
+    }
 
     private void MaybeScheduleCacheVerification(TrackSnapshot track, ResolvedAudioFormat resolved)
     {

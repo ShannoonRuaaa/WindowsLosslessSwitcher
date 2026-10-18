@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Per-recording native format corrections that override web catalog/cache results
+  for the matching title, artist, and album, with save/apply and removal controls.
 - Optional intro replay after a live format change, with recording and timeline
   confirmation before using Apple Music's seek or Previous controls.
 

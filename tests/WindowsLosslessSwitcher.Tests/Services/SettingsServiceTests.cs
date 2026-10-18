@@ -24,6 +24,7 @@ public sealed class SettingsServiceTests
                 LaunchAtLogin = true,
                 SwitchBitDepth = false,
                 RewindAfterFormatSwitch = false,
+                TrackFormatCorrections = [new("Dirty Diana", "Michael Jackson", "Number Ones", 96000, 24)],
                 DefaultBitDepth = 16,
                 EnableSwitchToasts = true,
                 IncludeTrackMetadataInSwitchToasts = true,
@@ -56,6 +57,7 @@ public sealed class SettingsServiceTests
             Assert.Equal("gb", loaded.AppleMusicStorefront);
             Assert.False(loaded.EnableVerboseDiagnostics);
             Assert.False(loaded.RewindAfterFormatSwitch);
+            Assert.Equal(settings.TrackFormatCorrections, loaded.TrackFormatCorrections);
             Assert.False(loaded.RestartAppleMusicOnPlaybackFailure);
         }
         finally

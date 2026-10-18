@@ -1291,6 +1291,55 @@ public sealed class SwitchingCoordinatorTests
         Assert.Empty(transport.SeekPositions);
     }
 
+    [Fact]
+    public async Task NativeCorrection_TakesPriorityOverCachedWebResult()
+    {
+        var tracks = new TestTrackSource();
+        var transport = new TestMediaTransportController();
+        var endpoint = new TestAudioEndpointController(DefaultDevice, LosslessFormat, [FallbackFormat, LosslessFormat]);
+        var catalogCalls = 0;
+        var resolver = new DelegateResolver((_, _) => { catalogCalls++; return Task.FromResult<ResolvedAudioFormat?>(CreateResolvedFormat(FallbackFormat, AudioFormatSource.CachedCatalog)); });
+        await using var coordinator = CreateCoordinator(tracks, transport, endpoint, resolver);
+        var track = CreateTrack("Dirty Diana") with { Artist = "Michael Jackson", Album = "Number Ones" };
+        var settings = CreateSettings();
+        settings.TrackFormatCorrections = [TrackFormatCorrection.FromTrack(track, 96000, 24)];
+        await coordinator.StartAsync(settings, CancellationToken.None);
+        var completed = WaitForStatusAsync(coordinator, status => status.FailureReason == "Target format already active.");
+
+        tracks.RaiseTrackChanged(track);
+        var status = await completed.WaitAsync(DefaultTimeout);
+
+        Assert.Equal(0, catalogCalls);
+        Assert.Equal(96000, status.RequestedFormat!.SampleRateHz);
+        Assert.Equal(AudioFormatSource.UserVerified, status.RequestedFormat.Source);
+        Assert.Equal(LosslessFormat, status.AppliedFormat);
+    }
+
+    [Fact]
+    public async Task SavingNativeCorrection_ReprocessesCurrentTrackWithoutWaitingForTrackChange()
+    {
+        var tracks = new TestTrackSource();
+        var transport = new TestMediaTransportController();
+        var endpoint = new TestAudioEndpointController(DefaultDevice, FallbackFormat, [FallbackFormat, LosslessFormat]) { MasterPeakValue = 0.01f };
+        var resolver = new DelegateResolver((_, _) => Task.FromResult<ResolvedAudioFormat?>(CreateResolvedFormat(FallbackFormat, AudioFormatSource.CachedCatalog)));
+        await using var coordinator = CreateCoordinator(tracks, transport, endpoint, resolver);
+        var settings = CreateSettings();
+        var track = CreateTrack("Dirty Diana") with { Artist = "Michael Jackson", Album = "Number Ones" };
+        await coordinator.StartAsync(settings, CancellationToken.None);
+        var first = WaitForStatusAsync(coordinator, status => status.FailureReason == "Target format already active.");
+        tracks.RaiseTrackChanged(track);
+        await first.WaitAsync(DefaultTimeout);
+
+        settings.TrackFormatCorrections = [TrackFormatCorrection.FromTrack(track, 96000, 24)];
+        coordinator.UpdateSettings(settings);
+        var corrected = WaitForStatusAsync(coordinator, status => status.WasFormatChanged && status.RequestedFormat?.Source == AudioFormatSource.UserVerified);
+        coordinator.ReprocessTrack(track);
+        var final = await corrected.WaitAsync(DefaultTimeout);
+
+        Assert.Equal(LosslessFormat, final.AppliedFormat);
+        Assert.Equal(1, endpoint.TryApplyFormatCallCount);
+    }
+
     private static SwitchingCoordinator CreateCoordinator(
         TestTrackSource trackSource,
         TestMediaTransportController mediaTransportController,

@@ -20,6 +20,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private bool _launchAtLogin;
     private bool _switchBitDepth;
     private bool _rewindAfterFormatSwitch = true;
+    private int _nativeSampleRateHz = 96000;
+    private int _nativeBitDepth = 24;
+    private bool _canCorrectCurrentTrack;
+    private bool _hasCurrentTrackCorrection;
     private bool _preferClosestSampleRateMultiple;
     private int _defaultBitDepth = 24;
     private bool _enableSwitchToasts;
@@ -88,6 +92,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             () => OpenReleasesPageRequested?.Invoke(),
             () => CanOpenReleasesPage);
         OpenAllSettingsCommand = new RelayCommand(() => OpenSettingsWindowRequested?.Invoke());
+        SaveNativeFormatCorrectionCommand = new RelayCommand(() => SaveNativeFormatCorrectionRequested?.Invoke(), () => CanCorrectCurrentTrack);
+        RemoveNativeFormatCorrectionCommand = new RelayCommand(() => RemoveNativeFormatCorrectionRequested?.Invoke(), () => HasCurrentTrackCorrection);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -107,6 +113,26 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public event Action? ClearFormatCacheRequested;
 
     public event Action? OpenSettingsWindowRequested;
+    public event Action? SaveNativeFormatCorrectionRequested;
+    public event Action? RemoveNativeFormatCorrectionRequested;
+
+    public RelayCommand SaveNativeFormatCorrectionCommand { get; }
+    public RelayCommand RemoveNativeFormatCorrectionCommand { get; }
+    public IReadOnlyList<int> NativeSampleRateOptions => TrackFormatCorrection.SupportedRates;
+    public IReadOnlyList<int> NativeBitDepthOptions { get; } = [16, 24, 32];
+    public int NativeSampleRateHz { get => _nativeSampleRateHz; set => SetField(ref _nativeSampleRateHz, value); }
+    public int NativeBitDepth { get => _nativeBitDepth; set => SetField(ref _nativeBitDepth, value); }
+    public TrackSnapshot? CorrectionTrack { get; private set; }
+    public bool CanCorrectCurrentTrack
+    {
+        get => _canCorrectCurrentTrack;
+        private set { if (SetField(ref _canCorrectCurrentTrack, value)) SaveNativeFormatCorrectionCommand.RaiseCanExecuteChanged(); }
+    }
+    public bool HasCurrentTrackCorrection
+    {
+        get => _hasCurrentTrackCorrection;
+        private set { if (SetField(ref _hasCurrentTrackCorrection, value)) RemoveNativeFormatCorrectionCommand.RaiseCanExecuteChanged(); }
+    }
 
     public ObservableCollection<AudioDeviceInfo> Devices { get; } = [];
 
@@ -569,6 +595,14 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
     public void UpdateStatus(Services.SwitchingStatus status)
     {
+        CorrectionTrack = status.Track;
+        CanCorrectCurrentTrack = status.Track is not null && TrackFormatCorrection.FromTrack(status.Track, NativeSampleRateHz, NativeBitDepth).IsValid;
+        HasCurrentTrackCorrection = status.RequestedFormat?.Source == AudioFormatSource.UserVerified;
+        if (HasCurrentTrackCorrection)
+        {
+            NativeSampleRateHz = status.RequestedFormat!.SampleRateHz;
+            NativeBitDepth = status.RequestedFormat.BitDepth;
+        }
         ResolverStatusText = status.ResolverStatusText;
         CurrentTrackText = status.Track is null
             ? "No track detected"
@@ -648,8 +682,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         {
             "Resolver: Waiting for Apple Music" or "Resolver: Starting" or "Resolver: Idle" => SwitchPhase.Idle,
             "Resolver: Detecting track" => SwitchPhase.Detecting,
-            "Resolver: Deferred until playback" => SwitchPhase.Idle,
             "Resolver: Resolving format" => SwitchPhase.Resolving,
+            "Resolver: Deferred until playback" => SwitchPhase.Idle,
             "Resolver: Error" or "Resolver: Failed" or "Resolver: No target device" => SwitchPhase.Failed,
             _ when text.StartsWith("Resolver: ", StringComparison.Ordinal) =>
                 status.AppliedFormat is not null
@@ -700,6 +734,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         AudioFormatSource.CatalogManifest or AudioFormatSource.CachedCatalog => "Catalog match",
         AudioFormatSource.LocalFile => "Local file",
         AudioFormatSource.TierFallback => "Fallback",
+        AudioFormatSource.UserVerified => "Native correction",
         _ => "",
     };
 

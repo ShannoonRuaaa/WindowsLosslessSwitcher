@@ -92,6 +92,8 @@ public partial class App : Application
         _viewModel.RestoreOriginalFormatRequested += OnRestoreOriginalFormatRequested;
         _viewModel.ClearFormatCacheRequested += OnClearFormatCacheRequested;
         _viewModel.OpenSettingsWindowRequested += ShowSettingsWindow;
+        _viewModel.SaveNativeFormatCorrectionRequested += OnSaveNativeFormatCorrection;
+        _viewModel.RemoveNativeFormatCorrectionRequested += OnRemoveNativeFormatCorrection;
 
         _trayIconHost = new TrayIconHost();
         _trayIconHost.OpenRequested += ShowMainWindow;
@@ -194,6 +196,8 @@ public partial class App : Application
         _viewModel.RestoreOriginalFormatRequested -= OnRestoreOriginalFormatRequested;
         _viewModel.ClearFormatCacheRequested -= OnClearFormatCacheRequested;
         _viewModel.OpenSettingsWindowRequested -= ShowSettingsWindow;
+        _viewModel.SaveNativeFormatCorrectionRequested -= OnSaveNativeFormatCorrection;
+        _viewModel.RemoveNativeFormatCorrectionRequested -= OnRemoveNativeFormatCorrection;
         _instanceGuard.Dispose();
         base.OnExit(e);
     }
@@ -251,6 +255,30 @@ public partial class App : Application
                 }
             }
         });
+    }
+
+    private void OnSaveNativeFormatCorrection()
+    {
+        var track = _viewModel.CorrectionTrack;
+        if (_settings is null || track is null || _latestStatus?.Track?.UniqueKey != track.UniqueKey) return;
+        var correction = TrackFormatCorrection.FromTrack(track, _viewModel.NativeSampleRateHz, _viewModel.NativeBitDepth);
+        if (!correction.IsValid) return;
+        _settings.TrackFormatCorrections = _settings.TrackFormatCorrections
+            .Where(existing => existing is not null && !existing.Matches(track)).Append(correction).ToList();
+        _settingsService.Save(_settings);
+        _coordinator?.UpdateSettings(_settings);
+        _coordinator?.ReprocessTrack(track);
+    }
+
+    private void OnRemoveNativeFormatCorrection()
+    {
+        var track = _viewModel.CorrectionTrack;
+        if (_settings is null || track is null || _latestStatus?.Track?.UniqueKey != track.UniqueKey) return;
+        _settings.TrackFormatCorrections = _settings.TrackFormatCorrections
+            .Where(existing => existing is not null && !existing.Matches(track)).ToList();
+        _settingsService.Save(_settings);
+        _coordinator?.UpdateSettings(_settings);
+        _coordinator?.ReprocessTrack(track);
     }
 
     private void OnFormatCacheUpdated(object? sender, FormatCacheUpdateEventArgs e)
