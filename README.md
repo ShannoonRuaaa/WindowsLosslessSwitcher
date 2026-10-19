@@ -20,7 +20,7 @@ The app lives in the system tray and stays out of the way. It is an independent 
 - Automatic sample-rate and optional bit-depth switching for Apple Music for Windows
 - Exact format matching against the Apple Music catalog; local files are matched to their actual file format
 - Follows the Windows default playback device, or pins a specific device
-- Keeps playback audible during format lookup and unchanged-format transitions, mutes live device changes, and optionally replays the intro once the renderer is ready
+- Optional full-intro replay keeps pending preparation muted and restarts once the renderer is ready; known matching formats continue without muting or restarting
 - Verifies audio is actually flowing after every switch, with automatic recovery if Apple Music's player stalls
 - Optional popup toast when a new format is applied
 - Tray-first UI with current format display, diagnostics export, and update checks
@@ -28,12 +28,14 @@ The app lives in the system tray and stays out of the way. It is an independent 
 
 ### Replaying an intro after a format change
 
-Under **Settings > Switching**, **Replay the intro after a format change** restarts the same recording at 0:00 after a live device-format change. It defaults to on; turn it off to keep the current timeline position. Tracks that already match the device format continue without a restart or mute. Format changes detected while paused wait until playback resumes.
+Under **Settings > Switching**, **Replay the intro after a format change** mutes pending preparation and restarts the same recording at 0:00 after a live device-format change. It defaults to on; turn it off to keep format lookup audible and retain the current timeline position. Immediately available matching formats are neither muted nor restarted. A first network lookup can still have a preparation gap with replay enabled. Format changes detected while paused wait until playback resumes.
 
-Apple Music can acknowledge a seek without moving. The restart confirms both recording identity and timeline position. If seeking is unavailable or ineffective, one Previous command is allowed only while the same recording is paused and at least five seconds in. If a safe restart cannot be confirmed, playback resumes at its current position. Radio/autoplay sessions may disable both commands. The beginning can play briefly at the previous device format while the new format is being resolved.
+Apple Music can acknowledge a seek without moving. The restart confirms both recording identity and timeline position. If seeking is unavailable or ineffective, one Previous command is allowed only while the same recording is paused and at least five seconds in. If a safe restart cannot be confirmed, playback resumes at its current position. Radio/autoplay sessions may disable both commands. Muting starts when track metadata is detected; Windows can deliver that metadata after playback has already started.
 ### Native format corrections
 
 The public Apple Music catalog can report a different format from the Windows player's Lossless details. In **Settings > Switching > Native format correction**, select the sample rate and bit depth shown by Apple Music, then choose **Save and apply**. The saved correction overrides catalog/cache results only for the matching title, artist, and album. **Remove correction** restores automatic resolution. This requires a user-verified format; the app does not inspect the native Apple Music stream.
+
+If catalog and local-file detection cannot determine the track's format, the device keeps its current format and the app displays **Undetermined**. An audio-quality preference alone does not establish a recording's sample rate. See [ISSUE_FIXES.md](ISSUE_FIXES.md) for reported-issue coverage and remaining validation.
 ## Installation
 
 1. Go to the [latest release](https://github.com/jordanmgibson/WindowsLosslessSwitcher/releases/latest).

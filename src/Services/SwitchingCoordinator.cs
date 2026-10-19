@@ -610,10 +610,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
             _logger.Info("Starting target-device selection.", correlation);
             var targetSelectionStopwatch = Stopwatch.StartNew();
-            var devices = _audioEndpointController.GetRenderDevices();
-            var defaultDevice = devices.FirstOrDefault(device => device.IsDefault)
-                ?? _audioEndpointController.GetDefaultRenderDevice();
-            var targetDevice = DeviceTargetingPolicy.SelectTargetDevice(Settings, devices, defaultDevice);
+            var targetDevice = GetCurrentTargetDevice();
             _logger.Info(
                 $"Target-device selection completed after {targetSelectionStopwatch.ElapsedMilliseconds} ms. " +
                 $"result={(targetDevice?.FriendlyName ?? "none")}.",
@@ -634,12 +631,26 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
             targetDeviceName = targetDevice.FriendlyName;
             _lastTargetDeviceId = targetDevice.Id;
-            // A successor must release the old track's mute before resolving anything slow.
-            UnmuteTargetDeviceAfterProcessing(correlation);
-
+            // Keep pending intro preparation silent through the confirmed restart;
+            // otherwise the listener hears the opening twice. Keep an inherited mute on the
+            // same endpoint, but release it when the target changes or replay is disabled.
+            var protectIntro = Settings.RewindAfterFormatSwitch &&
+                (pausedPlayback || _mediaTransportController.GetPlaybackState().IsPlaying);
+            if (!protectIntro || !string.Equals(_mutedDeviceId, targetDevice.Id, StringComparison.Ordinal))
+            {
+                UnmuteTargetDeviceAfterProcessing(correlation);
+            }
             PublishStatusIfCurrent(generation, new SwitchingStatus("Resolver: Resolving format", targetDevice.FriendlyName, track, null, null, null));
             stage = TrackProcessingStage.ResolvingFormat;
-            var resolved = await ResolveFormatAsync(track, cancellationToken);
+            var resolution = ResolveFormatAsync(track, cancellationToken);
+            // Cache hits and native corrections complete synchronously: inspect them before
+            // muting so a known matching format has no artificial gap (issue #2). Keep pending
+            // lookups silent in intro-replay mode, as requested, until their result is known.
+            if (protectIntro && !resolution.IsCompletedSuccessfully)
+            {
+                MuteTargetDeviceForProcessing(targetDevice.Id, correlation);
+            }
+            var resolved = await resolution;
             if (resolved?.Source == AudioFormatSource.CachedCatalog)
             {
                 MaybeScheduleCacheVerification(track, resolved);
@@ -659,6 +670,22 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            if (resolved.Source == AudioFormatSource.TierFallback || resolved.Confidence != ResolutionConfidence.Exact)
+            {
+                // A quality preference is a ceiling, not a measurement of this recording.
+                // Guessing 44.1/48 kHz caused false rate changes and album oscillation (#3/#4).
+                (resumeAttempted, _) = await ResumeIfNeededAsync(pausedPlayback, resumeAttempted,
+                    targetDevice.FriendlyName, null, cancellationToken);
+                UnmuteTargetDeviceAfterProcessing(correlation);
+                var currentFormat = _audioEndpointController.GetCurrentDeviceFormat(targetDevice.Id);
+                var health = await VerifyPlaybackHealthAfterNoSwitchAsync(targetDevice.Id,
+                    targetDevice.FriendlyName, generation, track, resolved, currentFormat, correlation, cancellationToken);
+                resumeAttempted = resumeAttempted || health != PlaybackHealthOutcome.Healthy;
+                PublishStatusIfCurrent(generation, new SwitchingStatus("Resolver: Rate undetermined",
+                    targetDevice.FriendlyName, track, resolved, currentFormat,
+                    AppendHealthNote("Track rate is undetermined; keeping the current device format. Use a native format correction if needed.", health)));
+                return;
+            }
             var decision = EvaluateResolvedFormat(targetDevice, resolved);
             if (decision.SelectedFormat is null)
             {
@@ -701,9 +728,18 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
                 return;
             }
 
+            if (protectIntro)
+            {
+                MuteTargetDeviceForProcessing(targetDevice.Id, correlation);
+            }
+
             if (pausedPlayback)
             {
-                var resumed = await ResumePlaybackAfterPauseAsync(targetDeviceName, cancellationToken);
+                // A successor may inherit our pause. Start its renderer without leaking a
+                // preview at the old format while the intro replay is still being prepared.
+                var resumed = protectIntro
+                    ? await TryPlayWithRetriesAsync(cancellationToken)
+                    : await ResumePlaybackAfterPauseAsync(targetDeviceName, cancellationToken);
                 resumeAttempted = true;
                 pausedPlayback = !resumed;
                 if (!resumed) return;
@@ -784,8 +820,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
                 $"deviceFormatBefore={(decision.CurrentDeviceFormat?.DisplayName ?? "unknown")}, mixFormatBefore={(decision.CurrentMixFormat?.DisplayName ?? "unknown")}.");
             PublishStatusIfCurrent(generation, new SwitchingStatus("Switching: Applying format", targetDevice.FriendlyName, track, resolved, null, null));
 
-            // Mute only the actual device change. Resolution, stream startup, and consecutive
-            // tracks at the same format must not create artificial gaps.
+            // Without intro replay, leave lookup/startup audible and mute only the device change.
             if (liveStream) MuteTargetDeviceForProcessing(targetDevice.Id, correlation);
             if (!_audioEndpointController.TryApplyFormat(targetDevice.Id, decision.SelectedFormat, out var verifiedDeviceFormat, out var failure))
             {
@@ -1931,6 +1966,11 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
     private AudioDeviceInfo? GetCurrentTargetDevice()
     {
+        if (Settings.DeviceSelectionMode == DeviceSelectionMode.FollowDefault)
+        {
+            return _audioEndpointController.GetDefaultRenderDevice();
+        }
+
         var devices = _audioEndpointController.GetRenderDevices();
         var defaultDevice = devices.FirstOrDefault(device => device.IsDefault)
             ?? _audioEndpointController.GetDefaultRenderDevice();
@@ -1954,12 +1994,8 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
             $"deviceFormat={(currentDeviceFormat?.DisplayName ?? "unknown")}, mixFormat={(currentMixFormat?.DisplayName ?? "unknown")}, " +
             $"supported={(supportedFormatDescriptions.Count == 0 ? "none" : string.Join(", ", supportedFormatDescriptions))}.");
 
-        // Tier-fallback results apply like any other resolution: the value derives from the
-        // user's Apple Music quality setting, the live switch makes low-confidence changes
-        // safe, and a constant fallback means consecutive unidentified tracks are no-ops.
-        // (The old "never switch on tier fallback" rule guarded the pause/drain pipeline,
-        // where a wrong switch could zombie playback — obsolete since the live-switch
-        // redesign, and it left the resolved and applied formats visibly mismatched.)
+        // Only measured/catalog-resolved formats reach selection. Undetermined quality-tier
+        // markers are handled earlier and never force the endpoint to a guessed rate.
         var selectedFormat = FormatSelectionPolicy.SelectBest(
             resolved,
             currentDeviceFormat,

@@ -37,11 +37,11 @@ public static class AccessibleTheme
         Set(["AccentTint", "AccentDeep", "AccentHoverFill"], SystemColors.WindowBrush);
         if (!highContrast && lightTheme)
         {
-            foreach (var key in TextKeys) Color(key, key is "Text" or "Text80" or "Text75" ? "#FF1B1B1F" : "#FF52525B");
-            Color("Ground", "#FFF3F3F6"); Color("Surface", "#FFFAFAFC"); Color("Recessed", "#FFFFFFFF"); Color("Hover", "#FFE8E8EE");
-            Color("Accent", "#FF6250A5"); Color("AccentLight", "#FF524293"); Color("AccentPulse", "#FF6250A5"); Color("FocusGlow", "#406250A5");
-            Color("AccentTint", "#FFECE8F6"); Color("AccentDeep", "#FFC4B6E4"); Color("AccentHoverFill", "#1F6250A5");
-            Color("Ring", "#FF878791"); Color("MidRing", "#FF6D6D75");
+            foreach (var key in TextKeys) Color(key, key is "Text" or "Text80" or "Text75" ? "#FF1C1C1C" : "#FF525252");
+            Color("Ground", "#FFF3F3F3"); Color("Surface", "#FFFAFAFA"); Color("Recessed", "#FFFFFFFF"); Color("Hover", "#FFE8E8E8");
+            Color("Accent", "#FFB91C3C"); Color("AccentLight", "#FF9F1239"); Color("AccentPulse", "#FFB91C3C"); Color("FocusGlow", "#40B91C3C");
+            Color("AccentTint", "#FFFCE8EC"); Color("AccentDeep", "#FFE7B4BE"); Color("AccentHoverFill", "#1FB91C3C");
+            Color("Ring", "#FF878787"); Color("MidRing", "#FF6D6D6D");
             foreach (var key in BorderKeys.Where(k => k.StartsWith("Hairline"))) Color(key, "#29000000");
         }
 

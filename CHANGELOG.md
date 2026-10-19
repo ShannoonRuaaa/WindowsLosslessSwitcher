@@ -18,7 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Keep playback audible during format lookup and unchanged-format transitions;
+- Known same-format cache/native/local results no longer mute or restart playback (#2).
+- Undetermined-rate fallback keeps the current device format and is labelled honestly (#3/#4).
+- Catalog matching recognizes the verified 苺りなはむ/ICHIGORINAHAMU artist credit,
+  compares reordered full credits, and checks album-specific candidates before
+  accepting another edition. Old matching-cache entries are invalidated (#3/#4).
+- Keep intro-replay preparation muted before lookup and across inherited pauses,
+  preventing an audible preview followed by a deliberate restart.
+- With intro replay off, keep playback audible during format lookup and unchanged-format transitions;
   defer device changes while paused and release coordinator-owned pauses on shutdown.
 - Sample audio-session activity and peak together and check fast endpoint changes
   earlier while retaining the existing slow-driver verification budget.
@@ -45,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Replace the purple interface palette with neutral charcoal surfaces and restrained
+  red active controls, including matching light-mode accents and neutral artwork placeholders.
 - Refresh Windows controls with system typography, readable labels, wrapping settings
   rows, system appearance/contrast support, and a resizable Settings window.
 - Ctrl+, opens Settings; reopening the app activates its existing main window.

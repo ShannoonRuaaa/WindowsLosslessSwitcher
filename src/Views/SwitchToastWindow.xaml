@@ -56,10 +56,10 @@
               EndPoint="1,1">
               <GradientStop
                 Offset="0"
-                Color="#FF423A6A" />
+                Color="#FF505050" />
               <GradientStop
                 Offset="1"
-                Color="#FF1B1D2B" />
+                Color="#FF242424" />
             </LinearGradientBrush>
           </Border.Background>
           <Grid>
@@ -199,10 +199,10 @@
               EndPoint="1,1">
               <GradientStop
                 Offset="0"
-                Color="#FF423A6A" />
+                Color="#FF505050" />
               <GradientStop
                 Offset="1"
-                Color="#FF1B1D2B" />
+                Color="#FF242424" />
             </LinearGradientBrush>
           </Border.Background>
           <Grid>

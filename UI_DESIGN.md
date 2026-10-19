@@ -15,6 +15,9 @@ complete Human Interface Guidelines or accessibility certification.
 
 ## Applied changes
 
+- Use neutral charcoal surfaces and soft red active controls inspired by Apple Music.
+  Keep artwork-derived colors, a matching neutral light palette, and Windows contrast overrides.
+
 - Use Segoe UI Variable Text with Segoe UI fallback. Remove artificial letter spacing
   from labels. Body text is 14 DIP; supporting text is at least 12 DIP. Use semibold
   for important titles and opaque supporting text with tested contrast.

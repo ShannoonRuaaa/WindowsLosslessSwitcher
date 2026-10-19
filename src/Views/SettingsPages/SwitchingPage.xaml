@@ -27,7 +27,7 @@
     <TextBlock Margin="0,8,0,0" Text="Playback" Style="{StaticResource Nocturne.Kicker}" TextWrapping="Wrap" />
     <Border Style="{StaticResource Nocturne.SettingsGroup}">
       <StackPanel>
-        <controls:SettingsRow Header="Replay the intro after a format change" Description="Restart the same track at 0:00 after its audio stream is ready.">
+        <controls:SettingsRow Header="Replay the intro after a format change" Description="Mute while checking the format, then restart at 0:00 after a change.">
           <ToggleButton IsChecked="{Binding RewindAfterFormatSwitch}" AutomationProperties.Name="Replay the intro after a format change" Style="{StaticResource Nocturne.ToggleSwitch}" />
         </controls:SettingsRow>
         <controls:SettingsRow Header="Match the track’s bit depth" Description="Match bit depth as well as sample rate.">

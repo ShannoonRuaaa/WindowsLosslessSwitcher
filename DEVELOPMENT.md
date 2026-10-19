@@ -59,7 +59,7 @@ Two debounce mechanisms prevent spurious events:
 | `FormatCacheResolver` | Returns a cached catalog result immediately. Entries are invalidated when catalog resolver semantics change and stale entries are verified in the background. | `Exact` |
 | `AppleMusicCatalogResolver` | Searches the Apple Music catalog API by track metadata, then fetches the HLS manifest for the best match to read `SAMPLE-RATE` and `BIT-DEPTH` attributes directly. Only a high-confidence match (exact title + exact artist) is accepted; weaker matches return `null` so the track is treated as local. | `Exact` |
 | `LocalDeviceMaxResolver` | Runs after the catalog. Locates the track's file in Apple Music's PlayCache via `PlayCacheTrackFormatReader` (TagLibSharp) and resolves to the file's true sample rate, with the best bit depth the device supports at that rate. Files are matched three ways, in confidence order: the in-progress download folder named after the track, the file Apple Music currently holds OPEN (replays of completed cache files), and a file written right at track start. When no file can be identified, it returns `null` and the chain falls through to the tier fallback — switching beyond the file's own rate gains nothing in shared mode, and the extreme device-max jumps it used to make (e.g. 24/48 → 24/384) destabilized Apple Music's renderer. | `Exact` |
-| `TierFallbackResolver` | Terminal safety net: derives a format from the user's Apple Music audio-quality preference (e.g. High-Res Lossless → 24/48). Applied like any other resolution, so the resolved and applied formats always match; because the fallback is constant, consecutive unidentified tracks are no-op switches. | `Tier` |
+| `TierFallbackResolver` | Terminal marker: the audio-quality preference does not determine a track's actual format. The coordinator retains the endpoint format and reports Undetermined; the legacy numeric fields are not applied or displayed as a detected rate. | `Tier` |
 
 ### 3. Format switching (`SwitchingCoordinator`)
 
@@ -68,14 +68,16 @@ Two debounce mechanisms prevent spurious events:
 ```
 TrackChanged event received
   │
-  ├─ Acquire switch lock and release an inherited endpoint mute
+  ├─ Acquire switch lock and transfer an inherited endpoint mute
   ├─ Select target device (default or pinned)
+  ├─ Intro replay on? → mute pending lookup; inspect synchronous results before muting
   ├─ Resolve saved native correction, or use ResolverChain
-  ├─ Evaluate device capabilities; already-active formats need no mute or restart
+  ├─ Unknown rate? → retain the endpoint format and report Undetermined
+  ├─ Evaluate device capabilities; immediately known active formats need no mute or restart
   ├─ Paused? → defer the device change until a Playing event or watchdog recheck
   ├─ Require the media agent's render stream to remain active for 1.5 seconds
   │   └─ Never sustains? → skip the device change and check playback health
-  ├─ Mute only the actual live device-format change, preserving user-owned mute
+  ├─ Ensure the live device-format change is muted, preserving user-owned mute
   ├─ Apply and verify the endpoint format; wait for real audio in the rebuilt stream
   ├─ Realign with a short pause; optionally restart the same recording at 0:00
   │   ├─ Confirm seek by identity and timeline position
@@ -85,12 +87,16 @@ TrackChanged event received
   └─ Between tracks, the watchdog detects stalled render streams and missed resumes
 ```
 
-Format resolution and render-stream startup remain audible, so a track may briefly
-play at the previous endpoint format. Only an actual device change is muted.
+With intro replay on, preparation is muted before format resolution so the listener
+does not hear the opening and then a deliberate restart. With replay off, resolution
+and render-stream startup remain audible and only the actual device change is muted.
 `RewindAfterFormatSwitch` defaults to on; unchanged-format tracks and later watchdog
 recoveries keep their position. A successful rewind is limited to once per track
 generation. Cancellation transfers coordinator-owned pauses to the successor;
 shutdown releases them before disposing the media-command session.
+
+Following the default device queries that endpoint directly. Pinned selection still
+enumerates available devices and preserves the missing-device result.
 
 The format change still happens under a live renderer. Changing a dormant Apple
 media-agent stream can leave it silent on resume, so paused changes are deferred.

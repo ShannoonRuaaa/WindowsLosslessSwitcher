@@ -56,7 +56,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     private List<int> _allowedBitDepths = [];
     private bool _syncingFormatOptions;
     private ImageSource? _artworkImage;
-    private Color _artworkGlowColor = Color.FromRgb(0x42, 0x3A, 0x6A);
+    private Color _artworkGlowColor = Color.FromRgb(0x50, 0x50, 0x50);
     private string _trackTitleText = "Nothing playing";
     private string _trackMetaText = "Waiting for Apple Music";
     private SwitchPhase _phase = SwitchPhase.Idle;
@@ -607,7 +607,10 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
         CurrentTrackText = status.Track is null
             ? "No track detected"
             : $"{status.Track.Title ?? "Unknown Title"} - {status.Track.Artist ?? "Unknown Artist"}";
-        RequestedFormatText = status.RequestedFormat is null
+        var undetermined = status.RequestedFormat?.Source == AudioFormatSource.TierFallback ||
+            status.RequestedFormat?.Confidence == ResolutionConfidence.Tier;
+        RequestedFormatText = undetermined ? "Undetermined"
+            : status.RequestedFormat is null
             ? "-"
             : $"{AudioFormatTextFormatter.Format(status.RequestedFormat)} ({status.RequestedFormat.Source})";
         AppliedFormatText = status.AppliedFormat is null
@@ -617,7 +620,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
 
         TrackTitleText = status.Track?.Title is { Length: > 0 } title ? title : "Nothing playing";
         TrackMetaText = BuildTrackMetaText(status.Track);
-        RequestedFormatDisplayText = status.RequestedFormat is null
+        RequestedFormatDisplayText = undetermined ? "Undetermined"
+            : status.RequestedFormat is null
             ? "—"
             : AudioFormatTextFormatter.Format(status.RequestedFormat);
         SourceChipText = BuildSourceChipText(status.RequestedFormat?.Source);
@@ -668,6 +672,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     internal static SwitchPhase DerivePhase(Services.SwitchingStatus status)
     {
         var text = status.ResolverStatusText;
+        if (text == "Resolver: Rate undetermined") return SwitchPhase.NoChange;
         if (text.StartsWith("Switching: Playback restored", StringComparison.Ordinal))
         {
             return SwitchPhase.Restored;
@@ -705,6 +710,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             "Recovering playback…",
         SwitchPhase.Switching => "Switching device format…",
         SwitchPhase.Restored => "Playback restored",
+        SwitchPhase.NoChange when status.ResolverStatusText == "Resolver: Rate undetermined" =>
+            "Track rate undetermined — keeping the current device format",
         SwitchPhase.NoChange => "No switch needed — format already matches",
         SwitchPhase.Failed => string.IsNullOrWhiteSpace(status.FailureReason)
             ? "Something went wrong — see diagnostics"
@@ -748,6 +755,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
                 title is { Length: > 0 }
                     ? $"Switched to {formatText} for “{title}”"
                     : $"Switched to {formatText}",
+            SwitchPhase.NoChange when status.ResolverStatusText == "Resolver: Rate undetermined" =>
+                "Track rate undetermined — device format unchanged",
             SwitchPhase.NoChange when formatText is not null && title is { Length: > 0 } =>
                 $"“{title}” — format already matched ({formatText})",
             SwitchPhase.Failed when !string.IsNullOrWhiteSpace(status.FailureReason) =>
@@ -787,7 +796,7 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
     public void UpdateArtwork(ImageSource? image, Color? glowColor, string? trackKey = null)
     {
         ArtworkImage = image;
-        ArtworkGlowColor = glowColor ?? Color.FromRgb(0x42, 0x3A, 0x6A);
+        ArtworkGlowColor = glowColor ?? Color.FromRgb(0x50, 0x50, 0x50);
         ArtworkTrackKey = image is null ? null : trackKey;
     }
 

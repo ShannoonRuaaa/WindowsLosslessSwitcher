@@ -104,7 +104,7 @@
                     Color="{Binding ArtworkGlowColor}" />
                   <GradientStop
                     Offset="1"
-                    Color="#FF1B1D2B" />
+                    Color="#FF242424" />
                 </LinearGradientBrush>
               </Border.Background>
               <Border.Effect>

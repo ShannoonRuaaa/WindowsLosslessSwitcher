@@ -31,7 +31,7 @@ public sealed class AppSettings
     public bool SwitchBitDepth { get; set; } = true;
 
     /// <summary>
-    /// After a live format switch has rebuilt the renderer, seek to the beginning before
+    /// Mute preparation and, after a live format switch has rebuilt the renderer, restart before
     /// resuming audibly. Tracks that need no switch and watchdog recoveries keep their position.
     /// </summary>
     public bool RewindAfterFormatSwitch { get; set; } = true;
