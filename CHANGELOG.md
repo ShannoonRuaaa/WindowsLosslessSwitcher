@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Replace the purple interface palette with neutral charcoal surfaces and restrained
+  red active controls, including matching light-mode accents and neutral artwork placeholders.
 - The tray flyout's track title and artist line scroll (marquee) when they
   are too long to fit, instead of being cut off with an ellipsis.
 - Local files no longer hit the Apple Music catalog on every play. A track

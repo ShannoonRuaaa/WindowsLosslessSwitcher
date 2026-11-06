@@ -1,5 +1,10 @@
 # Windows Lossless Switcher
 
+> This source includes an independent intro-preserving custom build. See
+> [OPTIMIZATION_NOTES.md](OPTIMIZATION_NOTES.md) for the changes, limitations, and
+> `Build-Optimized.ps1` instructions. The upstream documentation below describes the
+> original release; this build optionally rewinds to 0:00 after live format switches.
+
 [![CI](https://github.com/jordanmgibson/WindowsLosslessSwitcher/actions/workflows/ci.yml/badge.svg)](https://github.com/jordanmgibson/WindowsLosslessSwitcher/actions/workflows/ci.yml)
 
 Windows Lossless Switcher switches your audio device's sample rate to match the currently playing lossless song in Apple Music for Windows, automatically.

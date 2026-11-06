@@ -25,7 +25,13 @@ public static class ReleaseRepositoryOptions
     /// <summary>
     /// Returns true when the updater has a real GitHub repository target.
     /// </summary>
-    public static bool IsConfigured => IsConfiguredRepositoryTarget(Owner, Repository);
+    public static bool UpdatesEnabled => !string.Equals(ReadAssemblyMetadata("WlsEnableUpdates"), "false", StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsConfigured => UpdatesEnabled && IsConfiguredRepositoryTarget(Owner, Repository);
+
+    public static string UnavailableMessage => UpdatesEnabled
+        ? $"Updates are not configured yet. {ConfigurationInstructions}"
+        : "This custom build uses manual updates to preserve its playback changes.";
 
     /// <summary>
     /// Gets a concise description of how to configure the repository target.

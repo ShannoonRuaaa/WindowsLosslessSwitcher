@@ -66,7 +66,7 @@ public sealed class AppUpdater : IAppUpdater
             Publish(
                 new UpdateStatusSnapshot(
                     _currentVersion,
-                    $"Updates are not configured yet. {ReleaseRepositoryOptions.ConfigurationInstructions}",
+                    ReleaseRepositoryOptions.UnavailableMessage,
                     UpdateActionKind.None,
                     null,
                     false,
@@ -151,7 +151,7 @@ public sealed class AppUpdater : IAppUpdater
             Publish(
                 new UpdateStatusSnapshot(
                     _currentVersion,
-                    $"Updates are not configured yet. {ReleaseRepositoryOptions.ConfigurationInstructions}",
+                    ReleaseRepositoryOptions.UnavailableMessage,
                     UpdateActionKind.None,
                     null,
                     false,

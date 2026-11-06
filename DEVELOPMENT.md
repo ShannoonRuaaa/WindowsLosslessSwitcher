@@ -1,5 +1,9 @@
 # Development Guide
 
+> Custom-build changes to the switching pipeline and publish process are documented in
+> [OPTIMIZATION_NOTES.md](OPTIMIZATION_NOTES.md). The upstream architecture history below
+> predates the optional post-switch intro rewind and combined audio-session sampling.
+
 This document explains the internal architecture of Windows Lossless Switcher for contributors and maintainers.
 
 ## Architecture Overview
