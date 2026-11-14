@@ -185,6 +185,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
     private CancellationTokenSource? _currentTrackCts;
     private string? _currentTrackKey;
     private TrackSnapshot? _deferredTrack;
+    private long _playbackResumeVersion;
     private long _currentTrackGeneration;
     // Accessed under _switchLock. Never accept a rewind more than once per track generation,
     // even when a successful seek is followed by a failed play/recovery cycle.
@@ -266,11 +267,14 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
     public event EventHandler<FormatCacheUpdateEventArgs>? FormatCacheUpdated;
 
-    public AppSettings Settings { get; private set; } = new();
+    private AppSettings _settings = new();
+    private readonly AsyncLocal<AppSettings?> _processingSettings = new();
+    public AppSettings Settings => Volatile.Read(ref _settings).Snapshot();
+    private AppSettings EffectiveSettings => _processingSettings.Value ?? Volatile.Read(ref _settings);
 
     public async Task StartAsync(AppSettings settings, CancellationToken cancellationToken)
     {
-        Settings = settings;
+        Volatile.Write(ref _settings, settings.Snapshot());
         PublishStatus(new SwitchingStatus("Resolver: Waiting for Apple Music", null, null, null, null, null));
         _trackSource.TrackChanged += OnTrackChanged;
         _trackSource.PlaybackResumed += OnPlaybackResumed;
@@ -367,7 +371,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
     public void UpdateSettings(AppSettings settings)
     {
-        Settings = settings;
+        Volatile.Write(ref _settings, settings.Snapshot());
     }
 
     /// <summary>Re-evaluates the current track after a native-format correction is saved.</summary>
@@ -428,7 +432,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
                 // Stay out of the way while a track is being processed: the pipeline's own
                 // checks own those windows, and pause/mute states would read as wedges here.
-                if (Settings.KeepOutputFormatFixed || _switchLock.CurrentCount == 0 || HasActiveTrackTasks())
+                if (EffectiveSettings.KeepOutputFormatFixed || _switchLock.CurrentCount == 0 || HasActiveTrackTasks())
                 {
                     inactiveSince = null;
                     continue;
@@ -549,6 +553,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
     private void OnPlaybackResumed(object? sender, EventArgs args)
     {
+        Interlocked.Increment(ref _playbackResumeVersion);
         var pending = Interlocked.Exchange(ref _deferredTrack, null);
         if (pending is not null && pending.UniqueKey == _currentTrackKey)
             OnTrackChanged(this, pending);
@@ -583,6 +588,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
     private async Task ProcessTrackAsync(TrackSnapshot track, long generation, CancellationToken cancellationToken)
     {
+        _processingSettings.Value = Settings;
         var pausedPlayback = false;
         var resumeAttempted = false;
         var lockAcquired = false;
@@ -634,13 +640,13 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
             // Keep pending intro preparation silent through the confirmed restart;
             // otherwise the listener hears the opening twice. Keep an inherited mute on the
             // same endpoint, but release it when the target changes or replay is disabled.
-            var protectIntro = !Settings.KeepOutputFormatFixed && Settings.RewindAfterFormatSwitch &&
+            var protectIntro = !EffectiveSettings.KeepOutputFormatFixed && EffectiveSettings.RewindAfterFormatSwitch &&
                 (pausedPlayback || _mediaTransportController.GetPlaybackState().IsPlaying);
             if (!protectIntro || !string.Equals(_mutedDeviceId, targetDevice.Id, StringComparison.Ordinal))
             {
                 UnmuteTargetDeviceAfterProcessing(correlation);
             }
-            if (Settings.KeepOutputFormatFixed)
+            if (EffectiveSettings.KeepOutputFormatFixed)
             {
                 (resumeAttempted, _) = await ResumeIfNeededAsync(pausedPlayback, resumeAttempted,
                     targetDeviceName, null, cancellationToken);
@@ -755,11 +761,18 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
                 if (!resumed) return;
             }
 
+            var resumeVersionBeforeDeferral = Volatile.Read(ref _playbackResumeVersion);
             if (!_mediaTransportController.GetPlaybackState().IsPlaying)
             {
                 // A paused Apple stream can still own the old format. Changing it here makes
                 // that dormant stream unusable on resume. Re-evaluate on Playing instead.
                 Volatile.Write(ref _deferredTrack, track);
+                if (_mediaTransportController.GetPlaybackState().IsPlaying ||
+                    Volatile.Read(ref _playbackResumeVersion) != resumeVersionBeforeDeferral)
+                {
+                    OnPlaybackResumed(this, EventArgs.Empty);
+                    return;
+                }
                 _logger.Info("Playback paused; deferring the format change until playback resumes.", correlation);
                 PublishStatusIfCurrent(generation, new SwitchingStatus("Resolver: Deferred until playback", targetDeviceName,
                     track, resolved, decision.CurrentDeviceFormat, "Format change will apply when playback resumes."));
@@ -811,9 +824,16 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
                     correlation);
             }
 
+            resumeVersionBeforeDeferral = Volatile.Read(ref _playbackResumeVersion);
             if (!_mediaTransportController.GetPlaybackState().IsPlaying)
             {
                 Volatile.Write(ref _deferredTrack, track);
+                if (_mediaTransportController.GetPlaybackState().IsPlaying ||
+                    Volatile.Read(ref _playbackResumeVersion) != resumeVersionBeforeDeferral)
+                {
+                    OnPlaybackResumed(this, EventArgs.Empty);
+                    return;
+                }
                 PublishStatusIfCurrent(generation, new SwitchingStatus("Resolver: Deferred until playback", targetDeviceName,
                     track, resolved, decision.CurrentDeviceFormat, "Format change will apply when playback resumes."));
                 return;
@@ -1351,7 +1371,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
         // Apple's Previous command restarts only after a few seconds. Keep the rebuilt stream
         // running (muted) until a safe position, then pause and restart the same recording.
-        if (Settings.RewindAfterFormatSwitch && _mediaTransportController.MinimumRestartPosition > TimeSpan.Zero)
+        if (EffectiveSettings.RewindAfterFormatSwitch && _mediaTransportController.MinimumRestartPosition > TimeSpan.Zero)
         {
             var ready = Stopwatch.StartNew();
             while (state.IsPlaying && state.TimelinePosition is { } position &&
@@ -1481,7 +1501,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!Settings.RewindAfterFormatSwitch ||
+        if (!EffectiveSettings.RewindAfterFormatSwitch ||
             generation != Volatile.Read(ref _currentTrackGeneration) ||
             _introRewoundGeneration == generation)
         {
@@ -1534,7 +1554,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
             await Task.Delay(PlaybackRecoveryNudgeDelay, cancellationToken);
 
-            if (paused && switchApplied && rewindIntro && Settings.RewindAfterFormatSwitch)
+            if (paused && switchApplied && rewindIntro && EffectiveSettings.RewindAfterFormatSwitch)
             {
                 await TryRewindIntroAsync(generation, correlation, cancellationToken);
             }
@@ -1589,7 +1609,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
             // Apple Music simply never started the track. Before giving the song up, try once
             // more in place with a longer settle than the nudge loop uses: some of these
             // recover on a second attempt, and skipping costs the user the song outright.
-            if (await TryPatientRetryAsync(deviceId, correlation, cancellationToken))
+            if (await TryPatientRetryAsync(deviceId, targetDeviceName, correlation, cancellationToken))
             {
                 return true;
             }
@@ -1641,6 +1661,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
     /// </summary>
     private async Task<bool> TryPatientRetryAsync(
         string deviceId,
+        string? targetDeviceName,
         DiagnosticsLogger.LogCorrelation correlation,
         CancellationToken cancellationToken)
     {
@@ -1652,9 +1673,10 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
         Volatile.Write(ref _patientRetryUsedForTrack, true);
         _logger.Info("Track never started; retrying it in place before skipping.", correlation);
 
-        await _mediaTransportController.TryPauseAsync(cancellationToken);
+        var paused = await _mediaTransportController.TryPauseAsync(cancellationToken);
+        _transportPausedByCoordinator |= paused;
         await Task.Delay(PatientRetrySettleDelay, cancellationToken);
-        if (!await ResumePlaybackAfterPauseAsync(deviceId, cancellationToken))
+        if (!await ResumePlaybackAfterPauseAsync(targetDeviceName, cancellationToken))
         {
             return false;
         }
@@ -1702,7 +1724,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
     private bool ShouldEscalateToAppleMusicRestart()
     {
-        if (_appleMusicProcessController is null || !Settings.RestartAppleMusicOnPlaybackFailure)
+        if (_appleMusicProcessController is null || !EffectiveSettings.RestartAppleMusicOnPlaybackFailure)
         {
             return false;
         }
@@ -1894,7 +1916,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
     private Task<ResolvedAudioFormat?> ResolveFormatAsync(TrackSnapshot track, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var correction = TrackFormatCorrection.Resolve(Settings.TrackFormatCorrections, track);
+        var correction = TrackFormatCorrection.Resolve(EffectiveSettings.TrackFormatCorrections, track);
         if (correction is not null)
         {
             _logger.Info($"Using user-verified native format for '{track.Title}': {correction.BitDepth}/{correction.SampleRateHz}; bypassing the web catalog/cache.");
@@ -1908,7 +1930,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
         var entry = resolved.CachedCatalogEntry;
         if (_formatCacheVerificationService is null ||
             entry is null ||
-            !FormatCacheVerificationService.IsVerificationDue(entry, Settings.FormatCacheRefreshDays))
+            !FormatCacheVerificationService.IsVerificationDue(entry, EffectiveSettings.FormatCacheRefreshDays))
         {
             return;
         }
@@ -1990,7 +2012,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
     }
 
     private AudioDeviceInfo? GetCurrentTargetDevice()
-        => DeviceTargetingPolicy.GetCurrentTargetDevice(Settings, _audioEndpointController);
+        => DeviceTargetingPolicy.GetCurrentTargetDevice(EffectiveSettings, _audioEndpointController);
 
     private ResolvedTrackDecision EvaluateResolvedFormat(AudioDeviceInfo targetDevice, ResolvedAudioFormat resolved)
     {
@@ -2015,11 +2037,11 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
             resolved,
             currentDeviceFormat,
             supportedFormats,
-            Settings.SwitchBitDepth,
-            Settings.DefaultBitDepth,
-            Settings.PreferClosestSampleRateMultiple,
-            Settings.AllowedSampleRates,
-            Settings.AllowedBitDepths);
+            EffectiveSettings.SwitchBitDepth,
+            EffectiveSettings.DefaultBitDepth,
+            EffectiveSettings.PreferClosestSampleRateMultiple,
+            EffectiveSettings.AllowedSampleRates,
+            EffectiveSettings.AllowedBitDepths);
 
         if (selectedFormat is not null)
         {

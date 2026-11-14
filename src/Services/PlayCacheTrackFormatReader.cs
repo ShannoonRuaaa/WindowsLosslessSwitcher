@@ -73,9 +73,12 @@ public sealed class PlayCacheTrackFormatReader : ILocalTrackFileFormatReader
 
         try
         {
-            return MatchDownloadTemp(track)
-                ?? MatchInUseOrFreshlyWrittenFile(track)
-                ?? MatchRecentCacheInfoEntry(track);
+            var mediaFiles = Directory.EnumerateFiles(_playCacheDirectory, "*", SearchOption.AllDirectories)
+                .Where(path => CandidateExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                .Select(path => new FileInfo(path)).OrderByDescending(file => file.LastWriteTimeUtc).ToList();
+            return MatchDownloadTemp(track, mediaFiles)
+                ?? MatchFreshlyWrittenFile(track, mediaFiles)
+                ?? MatchRecentCacheInfoEntry(track, mediaFiles);
         }
         catch (Exception ex)
         {
@@ -84,32 +87,8 @@ public sealed class PlayCacheTrackFormatReader : ILocalTrackFileFormatReader
         }
     }
 
-    /// <summary>
-    /// Matches replayed cache files (no Downloads folder, stale PlayCacheInfo.xml — the common
-    /// case for local tracks played before). Two signals, in confidence order: a file the media
-    /// agent currently holds OPEN is the one it is playing or loading; failing that, a file
-    /// written right at track start is this track's own download completing.
-    /// </summary>
-    private LocalTrackFileFormat? MatchInUseOrFreshlyWrittenFile(TrackSnapshot track)
+    private LocalTrackFileFormat? MatchFreshlyWrittenFile(TrackSnapshot track, IReadOnlyList<FileInfo> mediaFiles)
     {
-        var mediaFiles = Directory.EnumerateFiles(_playCacheDirectory, "*", SearchOption.AllDirectories)
-            .Where(path => CandidateExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
-            .Select(path => new FileInfo(path))
-            .OrderByDescending(file => file.LastWriteTimeUtc)
-            .ToList();
-
-        foreach (var file in mediaFiles.Where(IsHeldOpenByAnotherProcess))
-        {
-            var probed = GetOrProbe(file);
-            if (probed is null || probed.SampleRateHz <= 0)
-            {
-                continue;
-            }
-
-            _logger.Info($"PlayCache match for '{track.Title}': file in use by Apple Music ({file.Name}) -> {DescribeFormat(probed)}.");
-            return new LocalTrackFileFormat(probed.SampleRateHz, probed.BitDepth, file.FullName, probed.Codec);
-        }
-
         var freshCutoff = (track.DetectedAtUtc - FreshWriteSlack).UtcDateTime;
         foreach (var file in mediaFiles.Where(file => file.LastWriteTimeUtc >= freshCutoff))
         {
@@ -126,50 +105,9 @@ public sealed class PlayCacheTrackFormatReader : ILocalTrackFileFormatReader
         return null;
     }
 
-    /// <summary>
-    /// Diagnostic escape hatch (set <c>WLS_DISABLE_INUSE_PROBE=1</c>): suppresses the exclusive-open
-    /// probe entirely so the reader never opens a PlayCache file. Used to test whether the probe
-    /// races Apple Music's own open of the file it is about to play — see
-    /// <see cref="IsHeldOpenByAnotherProcess"/>. Matching falls back to the freshly-written,
-    /// download-folder, and cache-info signals, which are non-invasive.
-    /// </summary>
-    internal static bool DisableInUseProbe { get; set; } =
-        Environment.GetEnvironmentVariable("WLS_DISABLE_INUSE_PROBE") == "1";
-
-    /// <summary>
-    /// True when another process holds the file open. Detection requires requesting exclusivity —
-    /// which is also the hazard: if Apple Music has not opened the file YET, this open succeeds and
-    /// denies Apple Music all access for as long as it is held. Losing that race leaves the track
-    /// unable to load at all (silent, timeline frozen at 0:00), which the coordinator then sees as
-    /// a stalled render stream. Callers must therefore keep the candidate set as small as possible.
-    /// </summary>
-    private static bool IsHeldOpenByAnotherProcess(FileInfo file)
+    private LocalTrackFileFormat? MatchDownloadTemp(TrackSnapshot track, IReadOnlyList<FileInfo> mediaFiles)
     {
-        if (DisableInUseProbe)
-        {
-            return false;
-        }
-
-        try
-        {
-            using var stream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.None);
-            return false;
-        }
-        catch (IOException)
-        {
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return true;
-        }
-    }
-
-    private LocalTrackFileFormat? MatchDownloadTemp(TrackSnapshot track)
-    {
-        var candidates = Directory.EnumerateFiles(_playCacheDirectory, "download.*", SearchOption.AllDirectories)
-            .Where(path => CandidateExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
-            .Select(path => new FileInfo(path))
+        var candidates = mediaFiles.Where(file => file.Name.StartsWith("download.", StringComparison.OrdinalIgnoreCase))
             .Where(file => file.Directory?.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) == true)
             .OrderByDescending(file => file.LastWriteTimeUtc);
 
@@ -194,7 +132,7 @@ public sealed class PlayCacheTrackFormatReader : ILocalTrackFileFormatReader
         return null;
     }
 
-    private LocalTrackFileFormat? MatchRecentCacheInfoEntry(TrackSnapshot track)
+    private LocalTrackFileFormat? MatchRecentCacheInfoEntry(TrackSnapshot track, IReadOnlyList<FileInfo> mediaFiles)
     {
         var entry = ReadNewestCacheInfoEntry();
         if (entry is null)
@@ -209,11 +147,7 @@ public sealed class PlayCacheTrackFormatReader : ILocalTrackFileFormatReader
         }
 
         var suffix = $"-{entry.CloudId:X16}";
-        var file = Directory.EnumerateFiles(_playCacheDirectory, "*", SearchOption.AllDirectories)
-            .Where(path => CandidateExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
-            .Where(path => Path.GetFileNameWithoutExtension(path).EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-            .Select(path => new FileInfo(path))
-            .FirstOrDefault();
+        var file = mediaFiles.FirstOrDefault(file => Path.GetFileNameWithoutExtension(file.Name).EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
         if (file is null)
         {
             return null;

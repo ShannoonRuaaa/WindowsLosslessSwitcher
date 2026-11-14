@@ -32,6 +32,10 @@ public sealed class TagLibAudioFileMetadataProbe : IAudioFileMetadataProbe
     {
         try
         {
+            var alac = System.IO.Path.GetExtension(filePath).Equals(".m4a", StringComparison.OrdinalIgnoreCase)
+                ? AlacBitDepthReader.TryReadFormat(filePath) : null;
+            if (alac is { SampleRateHz: > 0 } format)
+                return new AudioFileProbeResult(format.SampleRateHz, format.BitDepth, "ALAC");
             int sampleRate;
             int taglibBitDepth;
             using (var file = TagLib.File.Create(
@@ -44,7 +48,7 @@ public sealed class TagLibAudioFileMetadataProbe : IAudioFileMetadataProbe
                 taglibBitDepth = properties?.BitsPerSample ?? 0;
             }
 
-            var (codec, bitDepth) = ResolveCodecAndDepth(filePath, taglibBitDepth);
+            var (codec, bitDepth) = ResolveCodecAndDepth(filePath, taglibBitDepth, alac?.BitDepth);
             return new AudioFileProbeResult(sampleRate, bitDepth, codec);
         }
         catch (TagLib.CorruptFileException)
@@ -60,13 +64,12 @@ public sealed class TagLibAudioFileMetadataProbe : IAudioFileMetadataProbe
     // TagLib reads MP4 bit depth from the legacy sample-entry samplesize field (often 16 even for
     // 24-bit ALAC) and reports 0 for AAC, so for .m4a we consult the ALAC magic cookie: a value
     // there means the stream is lossless ALAC and gives its true depth; its absence means AAC.
-    private static (string? Codec, int BitDepth) ResolveCodecAndDepth(string filePath, int taglibBitDepth)
+    private static (string? Codec, int BitDepth) ResolveCodecAndDepth(string filePath, int taglibBitDepth, int? alacDepth)
     {
         var extension = System.IO.Path.GetExtension(filePath);
 
         if (string.Equals(extension, ".m4a", StringComparison.OrdinalIgnoreCase))
         {
-            var alacDepth = TryReadAlacBitDepth(filePath);
             return alacDepth is int depth ? ("ALAC", depth) : ("AAC", taglibBitDepth);
         }
 
@@ -80,24 +83,6 @@ public sealed class TagLibAudioFileMetadataProbe : IAudioFileMetadataProbe
             _ => null,
         };
         return (codec, taglibBitDepth);
-    }
-
-    private static int? TryReadAlacBitDepth(string filePath)
-    {
-        try
-        {
-            return AlacBitDepthReader.TryReadBitDepth(filePath);
-        }
-        catch (System.IO.IOException)
-        {
-            // File momentarily locked: keep TagLib's value for this lookup rather than failing the
-            // whole probe (a later lookup re-reads once the file is free).
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
     }
 
     // Apple Music keeps the playing PlayCache file open with write access, so the read stream must

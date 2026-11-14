@@ -72,8 +72,9 @@ public static class ArtworkColorAnalyzer
             // Colorful mid-brightness pixels dominate the vote.
             var weight = chroma * max;
             var radians = hue * Math.PI / 180.0;
-            sumX += Math.Cos(radians) * weight;
-            sumY += Math.Sin(radians) * weight;
+            var (sin, cos) = Math.SinCos(radians);
+            sumX += cos * weight;
+            sumY += sin * weight;
             totalWeight += weight;
         }
 

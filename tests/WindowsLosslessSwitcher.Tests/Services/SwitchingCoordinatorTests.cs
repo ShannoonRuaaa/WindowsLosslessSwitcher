@@ -7,6 +7,79 @@ namespace WindowsLosslessSwitcher.Tests.Services;
 
 public sealed class SwitchingCoordinatorTests
 {
+    [Fact]
+    public async Task ResumeBetweenPausedReadAndDeferral_ReprocessesWithoutWaitingForWatchdog()
+    {
+        var source = new TestTrackSource();
+        var transport = new TestMediaTransportController { IsPlaying = false };
+        var endpoint = new TestAudioEndpointController(DefaultDevice, CurrentFormat, [CurrentFormat, LosslessFormat])
+        { RenderSessionActiveProvider = () => true, MasterPeakValue = 0.01f };
+        var resolutionComplete = false;
+        var raced = false;
+        var resolver = new DelegateResolver((_, _) =>
+        {
+            resolutionComplete = true;
+            return Task.FromResult<ResolvedAudioFormat?>(CreateResolvedFormat(LosslessFormat));
+        });
+        transport.PlaybackStateRead = () =>
+        {
+            if (!resolutionComplete || raced) return;
+            raced = true;
+            transport.IsPlaying = true;
+            source.RaisePlaybackResumed();
+        };
+        await using var coordinator = CreateCoordinator(source, transport, endpoint, resolver);
+        var switched = WaitForStatusAsync(coordinator, status => status.WasFormatChanged);
+        var settings = CreateSettings();
+        settings.RewindAfterFormatSwitch = false;
+        await coordinator.StartAsync(settings, CancellationToken.None);
+        source.RaiseTrackChanged(CreateTrack());
+        await switched.WaitAsync(TimeSpan.FromSeconds(4.5));
+        Assert.True(raced);
+        Assert.Equal(1, endpoint.TryApplyFormatCallCount);
+    }
+
+    [Fact]
+    public async Task CancellationDuringPatientRetry_ReleasesOwnedPause()
+    {
+        var source = new TestTrackSource();
+        var transport = new TestMediaTransportController();
+        var endpoint = new TestAudioEndpointController(DefaultDevice, CurrentFormat, [CurrentFormat])
+        {
+            RenderSessionActiveProvider = () => false,
+            MasterPeakValue = 0f,
+        };
+        var retryPaused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        transport.PauseInvoked = () => { if (transport.PauseCallCount == 2) retryPaused.TrySetResult(); };
+        var resolver = new DelegateResolver((_, _) => Task.FromResult<ResolvedAudioFormat?>(CreateResolvedFormat(CurrentFormat)));
+        var coordinator = CreateCoordinator(source, transport, endpoint, resolver);
+        try
+        {
+            await coordinator.StartAsync(CreateSettings(), CancellationToken.None);
+            source.RaiseTrackChanged(CreateTrack());
+            await retryPaused.Task.WaitAsync(RecoveryTimeout);
+        }
+        finally { await coordinator.DisposeAsync(); }
+        Assert.True(transport.IsPlaying);
+        Assert.False(endpoint.MasterMute);
+    }
+
+    [Fact]
+    public async Task PublishedSettings_AreIsolatedFromCallerMutations()
+    {
+        var source = new TestTrackSource();
+        var transport = new TestMediaTransportController();
+        var endpoint = new TestAudioEndpointController(DefaultDevice, CurrentFormat, [CurrentFormat]);
+        var resolver = new DelegateResolver((_, _) => Task.FromResult<ResolvedAudioFormat?>(CreateResolvedFormat(CurrentFormat)));
+        await using var coordinator = CreateCoordinator(source, transport, endpoint, resolver);
+        var settings = CreateSettings();
+        settings.AllowedSampleRates = [44100];
+        await coordinator.StartAsync(settings, CancellationToken.None);
+        settings.AllowedSampleRates.Clear();
+        coordinator.Settings.AllowedSampleRates.Clear();
+        Assert.Equal([44100], coordinator.Settings.AllowedSampleRates);
+    }
+
     private static readonly AudioDeviceInfo DefaultDevice = new("default-device", "USB DAC", true);
     private static readonly AudioFormatCandidate CurrentFormat = new(44100, 16, 2);
     private static readonly AudioFormatCandidate FallbackFormat = new(48000, 24, 2);
@@ -898,10 +971,15 @@ public sealed class SwitchingCoordinatorTests
         streamAlive = false;
         audioEndpointController.MasterPeakValue = 0f;
         bool? mutedWhenRecoveryPaused = null;
-        mediaTransportController.PauseInvoked = () => mutedWhenRecoveryPaused ??= audioEndpointController.MasterMute;
-        var skipStatus = WaitForStatusAsync(coordinator, status => status.FailureReason?.Contains("Render stream not active") == true);
+        var recoveryPaused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        mediaTransportController.PauseInvoked = () =>
+        {
+            mutedWhenRecoveryPaused ??= audioEndpointController.MasterMute;
+            recoveryPaused.TrySetResult();
+        };
+        // Observe recovery starting, rather than waiting for all recovery attempts to finish.
         trackSource.RaiseTrackChanged(CreateTrack("Second Track"));
-        await skipStatus.WaitAsync(RecoveryTimeout);
+        await recoveryPaused.Task.WaitAsync(RecoveryTimeout);
 
         // Intro replay may mute preparation, but a skipped switch must release it before recovery.
         Assert.Equal([true, false], audioEndpointController.MuteCalls);
@@ -1687,6 +1765,7 @@ public sealed class SwitchingCoordinatorTests
         public Action? PlayInvoked { get; set; }
 
         public Action? PauseInvoked { get; set; }
+        public Action? PlaybackStateRead { get; set; }
 
         public TimeSpan? TimelinePosition { get; set; } = TimeSpan.FromSeconds(12);
 
@@ -1703,6 +1782,8 @@ public sealed class SwitchingCoordinatorTests
                 1 => PlaybackStatusSequence.Peek(),
                 _ => PlaybackStatusSequence.Dequeue(),
             };
+
+            PlaybackStateRead?.Invoke();
 
             return new(
                 status,

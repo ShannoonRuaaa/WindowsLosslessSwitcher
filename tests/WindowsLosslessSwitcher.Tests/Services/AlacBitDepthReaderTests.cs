@@ -7,6 +7,31 @@ namespace WindowsLosslessSwitcher.Tests.Services;
 public sealed class AlacBitDepthReaderTests
 {
     [Theory]
+    [InlineData(44100, 16)]
+    [InlineData(192000, 24)]
+    public void ReadsRateAndDepthFromSameCookie(int sampleRate, int depth)
+    {
+        var bytes = BuildAlacFile(depth, 16);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(bytes.Length - 4), (uint)sampleRate);
+        using var stream = new MemoryStream(bytes);
+        Assert.Equal(new AlacStreamInfo(sampleRate, depth), AlacBitDepthReader.TryReadFormat(stream));
+    }
+
+    [Fact]
+    public void MetadataProbe_ReadsAlacWithoutRequiringTagLibContainerMetadata()
+    {
+        var bytes = BuildAlacFile(24, 16);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(bytes.Length - 4), 96000);
+        var path = Path.Combine(Path.GetTempPath(), $"wls-alac-{Guid.NewGuid():N}.m4a");
+        try
+        {
+            File.WriteAllBytes(path, bytes);
+            Assert.Equal(new AudioFileProbeResult(96000, 24, "ALAC"), new TagLibAudioFileMetadataProbe().Probe(path));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Theory]
     [InlineData(16)]
     [InlineData(24)]
     public void ReadsTrueBitDepthFromAlacMagicCookie(int bitDepth)

@@ -16,6 +16,15 @@ public enum DeviceSelectionMode
 /// </summary>
 public sealed class AppSettings
 {
+    public AppSettings Snapshot()
+    {
+        var copy = (AppSettings)MemberwiseClone();
+        copy._allowedSampleRates = [.. _allowedSampleRates];
+        copy._allowedBitDepths = [.. _allowedBitDepths];
+        copy._trackFormatCorrections = [.. _trackFormatCorrections];
+        return copy;
+    }
+
     private int _defaultBitDepth = 24;
     private int _formatCacheRefreshDays = 30;
     private List<int> _allowedSampleRates = [];

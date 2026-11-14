@@ -997,9 +997,8 @@ public sealed class MainWindowViewModel : INotifyPropertyChanged
             snapshot.PrimaryActionKind is not UpdateActionKind.OpenReleasesPage;
         CanOpenReleasesPage = snapshot.CanOpenReleasesPage;
         OnPropertyChanged(nameof(HasUpdatePrimaryAction));
-        UpdateBadgeText = !ReleaseRepositoryOptions.UpdatesEnabled ? "Custom build" : HasUpdatePrimaryAction ||
-            (snapshot.LatestVersion is { Length: > 0 } latest &&
-             !string.Equals(latest, snapshot.CurrentVersion, StringComparison.OrdinalIgnoreCase))
+        UpdateBadgeText = !ReleaseRepositoryOptions.UpdatesEnabled ? "Custom build" :
+            snapshot.PrimaryActionKind is UpdateActionKind.DownloadAndPrepare or UpdateActionKind.RestartToApply or UpdateActionKind.OpenPortableDownload
             ? "Update available"
             : "Up to date";
     }

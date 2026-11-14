@@ -5,7 +5,7 @@ using System.Threading;
 
 namespace WindowsLosslessSwitcher.Services;
 
-public sealed class DiagnosticsLogger
+public sealed class DiagnosticsLogger : IDisposable
 {
     private const string LogMutexName = @"Local\WindowsLosslessSwitcher.Log";
 
@@ -15,6 +15,8 @@ public sealed class DiagnosticsLogger
     private readonly object _fileLock = new();
     private readonly Mutex _writeMutex;
     private volatile bool _verboseEnabled = true;
+    private bool _disposed;
+    private const long MaximumLogBytes = 5 * 1024 * 1024;
 
     public DiagnosticsLogger()
         : this(null)
@@ -89,6 +91,7 @@ public sealed class DiagnosticsLogger
     {
         lock (_fileLock)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             WaitForWriteMutex();
             try
             {
@@ -125,17 +128,34 @@ public sealed class DiagnosticsLogger
 
         lock (_fileLock)
         {
+            if (_disposed) return;
             WaitForWriteMutex();
             try
             {
+                if (File.Exists(_logPath) && new FileInfo(_logPath).Length >= MaximumLogBytes)
+                    File.Move(_logPath, Path.Combine(_logDirectory, "switcher.old.log"), overwrite: true);
                 using var stream = new FileStream(_logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
                 using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
                 writer.WriteLine(line);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Logging must not interrupt playback when disk access is unavailable.
             }
             finally
             {
                 ReleaseWriteMutex();
             }
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_fileLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _writeMutex.Dispose();
         }
     }
 

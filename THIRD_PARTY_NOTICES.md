@@ -22,7 +22,7 @@ Windows Lossless Switcher is licensed under `GPL-3.0-or-later` (see [LICENSE](LI
 
 | Component | Version | License | Source |
 | --------- | ------- | ------- | ------ |
-| [Microsoft.SourceLink.GitHub](https://github.com/dotnet/sourcelink) | 8.0.0 | [MIT](https://github.com/dotnet/sourcelink/blob/main/License.txt) | NuGet |
+| [Microsoft.SourceLink.GitHub](https://github.com/dotnet/sourcelink) | 10.0.403 | [MIT](https://github.com/dotnet/sourcelink/blob/main/License.txt) | NuGet |
 
 ## Test-time only
 

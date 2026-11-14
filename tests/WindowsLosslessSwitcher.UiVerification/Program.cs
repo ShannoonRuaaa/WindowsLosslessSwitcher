@@ -14,7 +14,7 @@ internal static class Program
     {
         // Materialize the actual release BAML without constructing the app, opening a window,
         // starting audio services, or touching the user's settings/startup registration.
-        var application = new Application();
+        var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         foreach (var theme in new[] { "Colors", "Typography", "Icons", "Controls" })
         {
             application.Resources.MergedDictionaries.Add(new ResourceDictionary
@@ -55,7 +55,36 @@ internal static class Program
         model.PreferClosestSampleRateMultiple = true;
         model.NativeSampleRateHz = 96000;
         DesignVerification.Run(application, model);
+        VerifyMarqueeTextChanges();
         application.Shutdown();
+    }
+
+    private static void VerifyMarqueeTextChanges()
+    {
+        var marquee = new WindowsLosslessSwitcher.Controls.MarqueeTextBlock { Text = "Short" };
+        var window = new Window { Content = marquee, Width = 220, Height = 80,
+            Left = -10000, Top = -10000, Opacity = 0, ShowInTaskbar = false, ShowActivated = false };
+        var storyboard = typeof(WindowsLosslessSwitcher.Controls.MarqueeTextBlock).GetField("_storyboard",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            if (storyboard.GetValue(marquee) is not null) throw new Exception("Short text unexpectedly scrolls.");
+            var width = marquee.ActualWidth;
+            marquee.Text = new string('W', 120);
+            window.UpdateLayout();
+            window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            if (marquee.ActualWidth != width || storyboard.GetValue(marquee) is null)
+                throw new Exception($"Changing text did not start marquee: width={width}->{marquee.ActualWidth}, visible={marquee.IsVisible}, desired={marquee.DesiredSize}, storyboard={storyboard.GetValue(marquee) is not null}.");
+            marquee.Text = "Short";
+            window.UpdateLayout();
+            window.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            if (storyboard.GetValue(marquee) is not null) throw new Exception("Shortened text kept scrolling.");
+            Console.WriteLine("PASS: Marquee starts and stops after text changes at a fixed width.");
+        }
+        finally { window.Close(); }
     }
 
     private static ToggleButton? FindToggle(DependencyObject node, string property = "RewindAfterFormatSwitch")

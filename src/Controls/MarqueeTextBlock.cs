@@ -65,13 +65,15 @@ public sealed class MarqueeTextBlock : Decorator
     protected override Size ArrangeOverride(Size arrangeSize)
     {
         _text.Arrange(new Rect(new Size(Math.Max(_text.DesiredSize.Width, arrangeSize.Width), arrangeSize.Height)));
+        RestartMarquee();
         return arrangeSize;
     }
 
     private void OnTextChanged()
     {
         _text.Text = Text;
-        RestartMarquee();
+        StopMarquee();
+        InvalidateMeasure();
     }
 
     private void RestartMarquee()

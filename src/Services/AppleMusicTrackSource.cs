@@ -44,6 +44,8 @@ public sealed class AppleMusicTrackSource : ITrackSource, IMediaTransportControl
     private readonly TimeSpan _sessionLossDebounce;
     private readonly CancellationTokenSource _repollCts = new();
     private readonly object _sessionStateSync = new();
+    private readonly SemaphoreSlim _sessionRefreshGate = new(1, 1);
+    private volatile bool _disposed;
     private GlobalSystemMediaTransportControlsSessionManager? _manager;
     private GlobalSystemMediaTransportControlsSession? _attachedSession;
     private string? _lastTrackKey;
@@ -121,11 +123,14 @@ public sealed class AppleMusicTrackSource : ITrackSource, IMediaTransportControl
 
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         _repollCts.Cancel();
         _repollCts.Dispose();
         CancelSessionLossDebounce();
         CancelPlaceholderPublish();
-        await DetachSessionAsync();
+        await _sessionRefreshGate.WaitAsync();
+        try { await DetachSessionAsync(); }
+        finally { _sessionRefreshGate.Release(); }
         if (_manager is not null)
         {
             _manager.SessionsChanged -= OnSessionsChanged;
@@ -421,6 +426,17 @@ public sealed class AppleMusicTrackSource : ITrackSource, IMediaTransportControl
 
     private async Task RefreshAttachedSessionAsync()
     {
+        await _sessionRefreshGate.WaitAsync();
+        try
+        {
+            if (_disposed) return;
+            await RefreshAttachedSessionCoreAsync();
+        }
+        catch (Exception ex) { _logger.Warn($"Session refresh failed: {ex.Message}"); }
+        finally { _sessionRefreshGate.Release(); }
+    }
+    private async Task RefreshAttachedSessionCoreAsync()
+    {
         if (_manager is null)
         {
             return;
@@ -493,6 +509,7 @@ public sealed class AppleMusicTrackSource : ITrackSource, IMediaTransportControl
         if (status == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
         {
             _logger.Info($"Apple Music playback-playing callback received from {sender.SourceAppUserModelId}.");
+            UpdateSessionFromPlaybackInfo(sender);
             await RefreshSessionFromPropertiesAsync(sender, "playback-playing", publishTrackSnapshot: true);
             PlaybackResumed?.Invoke(this, EventArgs.Empty);
             return;
@@ -822,8 +839,14 @@ public sealed class AppleMusicTrackSource : ITrackSource, IMediaTransportControl
                 return;
             }
 
-            await DetachSessionAsync();
-            _logger.Warn("Apple Music session was not found after debounce.");
+            await _sessionRefreshGate.WaitAsync(cts.Token);
+            try
+            {
+                cts.Token.ThrowIfCancellationRequested();
+                if (!_disposed && _manager.GetSessions().All(session => !IsAppleMusicSessionId(session.SourceAppUserModelId)))
+                    await DetachSessionAsync();
+            }
+            finally { _sessionRefreshGate.Release(); }
         }
         catch (OperationCanceledException)
         {

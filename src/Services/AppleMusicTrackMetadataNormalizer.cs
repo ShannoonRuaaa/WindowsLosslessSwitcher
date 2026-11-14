@@ -15,10 +15,10 @@ internal static class AppleMusicTrackMetadataNormalizer
         " ft ",
         " & ",
         ",",
-        ";",
-        "/",
-        " x ",
         " and ",
+        ";",
+        " / ",
+        " x ",
     ];
 
     public static TrackSnapshot NormalizeSnapshot(TrackSnapshot snapshot)
@@ -139,16 +139,20 @@ internal static class AppleMusicTrackMetadataNormalizer
             return string.Empty;
         }
 
+        var firstSeparator = artist.Length;
         foreach (var separator in ArtistSeparators)
         {
+            // These can be part of a band's name. Keep full names in search terms;
+            // SplitArtists still offers collaborator tokens when scoring candidates.
+            if (separator is " & " or "," or " and ") continue;
             var index = artist.IndexOf(separator, StringComparison.OrdinalIgnoreCase);
-            if (index > 0)
+            if (index > 0 && index < firstSeparator)
             {
-                return artist[..index].Trim();
+                firstSeparator = index;
             }
         }
 
-        return artist.Trim();
+        return artist[..firstSeparator].Trim();
     }
 
     /// <summary>

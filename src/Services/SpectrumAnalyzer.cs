@@ -17,6 +17,7 @@ public sealed class SpectrumAnalyzer
     private const int SampleRate = 48000;
     private const int FftSize = 2048;
     private const int FftOrder = 11;
+    private const int RingMask = FftSize * 2 - 1;
     private const int HopSize = 1024;
     private const double HopSeconds = HopSize / (double)SampleRate;
     private const double NoiseFloorDb = -60;
@@ -38,6 +39,7 @@ public sealed class SpectrumAnalyzer
 
     private int _writeIndex;
     private int _samplesSinceHop;
+    private int _silentSamples = FftSize;
     private volatile float[] _latestBars = new float[BarCount];
     private volatile int _hopsSinceNonSilent = int.MaxValue;
 
@@ -75,7 +77,8 @@ public sealed class SpectrumAnalyzer
         for (var i = 0; i + 1 < count; i += 2)
         {
             _ring[_writeIndex] = 0.5f * (interleaved[i] + interleaved[i + 1]);
-            _writeIndex = (_writeIndex + 1) % _ring.Length;
+            _silentSamples = _ring[_writeIndex] == 0 ? Math.Min(FftSize, _silentSamples + 1) : 0;
+            _writeIndex = (_writeIndex + 1) & RingMask;
             if (++_samplesSinceHop >= HopSize)
             {
                 _samplesSinceHop = 0;
@@ -87,31 +90,32 @@ public sealed class SpectrumAnalyzer
     private void RunHop()
     {
         // Latest FftSize mono samples end at _writeIndex.
-        var start = (_writeIndex - FftSize + _ring.Length) % _ring.Length;
-        for (var i = 0; i < FftSize; i++)
+        var start = (_writeIndex - FftSize) & RingMask;
+        var silent = _silentSamples >= FftSize;
+        for (var i = 0; !silent && i < FftSize; i++)
         {
-            var sample = _ring[(start + i) % _ring.Length] * _window[i];
+            var sample = _ring[(start + i) & RingMask] * _window[i];
             _fft[i].X = sample;
             _fft[i].Y = 0;
         }
 
-        FastFourierTransform.FFT(true, FftOrder, _fft);
+        if (!silent) FastFourierTransform.FFT(true, FftOrder, _fft);
 
         var anyAboveFloor = false;
         var published = new float[BarCount];
         for (var band = 0; band < BarCount; band++)
         {
-            double maxMagnitude = 0;
-            for (var bin = _bandStartBin[band]; bin <= _bandEndBin[band]; bin++)
+            double maxMagnitudeSquared = 0;
+            for (var bin = _bandStartBin[band]; !silent && bin <= _bandEndBin[band]; bin++)
             {
-                var magnitude = Math.Sqrt(_fft[bin].X * (double)_fft[bin].X + _fft[bin].Y * (double)_fft[bin].Y);
-                if (magnitude > maxMagnitude)
+                var magnitudeSquared = (_fft[bin].X * (double)_fft[bin].X + _fft[bin].Y * (double)_fft[bin].Y);
+                if (magnitudeSquared > maxMagnitudeSquared)
                 {
-                    maxMagnitude = magnitude;
+                    maxMagnitudeSquared = magnitudeSquared;
                 }
             }
 
-            var db = 20 * Math.Log10(maxMagnitude + 1e-12) + FullScaleCalibrationDb + _bandTiltDb[band];
+            var db = 10 * Math.Log10(maxMagnitudeSquared + 1e-24) + FullScaleCalibrationDb + _bandTiltDb[band];
             var raw = (float)Math.Clamp((db - NoiseFloorDb) / -NoiseFloorDb, 0, 1);
             if (raw > 0)
             {
@@ -138,6 +142,7 @@ public sealed class SpectrumAnalyzer
         Array.Clear(_display);
         _writeIndex = 0;
         _samplesSinceHop = 0;
+        _silentSamples = FftSize;
         _hopsSinceNonSilent = int.MaxValue;
         _latestBars = new float[BarCount];
     }

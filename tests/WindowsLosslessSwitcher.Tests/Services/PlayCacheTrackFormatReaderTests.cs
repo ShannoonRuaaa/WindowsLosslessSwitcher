@@ -99,10 +99,10 @@ public sealed class PlayCacheTrackFormatReaderTests : IDisposable
     }
 
     [Fact]
-    public void FileHeldOpenByAnotherProcess_MatchesCurrentTrack()
+    public void StaleFileHeldOpenByAnotherProcess_IsNotAssumedToBeCurrentTrack()
     {
-        // The media agent keeps an open handle on the file it is playing or loading; that handle
-        // is the strongest replay signal even when the file was written long ago.
+        // An arbitrary open handle is not proof of track identity, and exclusive probing
+        // can block Apple Music. A stale file needs another matching signal.
         var path = CreateCacheFile($"{LibraryId}\\02\\00\\00\\{LibraryId}-0000000000000457.mp3", ageMinutes: 10);
         var probe = new StubProbe { [path] = new AudioFileProbeResult(44100, 0) };
         var reader = CreateReader(probe);
@@ -110,9 +110,7 @@ public sealed class PlayCacheTrackFormatReaderTests : IDisposable
         using var holder = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         var result = reader.TryReadFormat(CreateTrack(title: "Some Replayed Song"));
 
-        Assert.NotNull(result);
-        Assert.Equal(path, result!.FilePath);
-        Assert.Equal(44100, result.SampleRateHz);
+        Assert.Null(result);
     }
 
     [Fact]

@@ -11,34 +11,38 @@ namespace WindowsLosslessSwitcher.Services;
 /// from the ALAC magic cookie. Returns null for non-ALAC containers (e.g. AAC), which is how
 /// callers tell lossless ALAC apart from lossy AAC.
 /// </summary>
+internal readonly record struct AlacStreamInfo(int SampleRateHz, int BitDepth);
 internal static class AlacBitDepthReader
 {
     /// <summary>
     /// Opens <paramref name="filePath"/> (sharing write/delete so it works while Apple Music holds
     /// the file open) and returns the ALAC bit depth, or null when the file is not ALAC.
     /// </summary>
-    public static int? TryReadBitDepth(string filePath)
+    public static int? TryReadBitDepth(string filePath) => TryReadFormat(filePath)?.BitDepth;
+    public static AlacStreamInfo? TryReadFormat(string filePath)
     {
         using var stream = new FileStream(
             filePath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
-        return TryReadBitDepth(stream);
+        return TryReadFormat(stream);
     }
 
-    public static int? TryReadBitDepth(Stream stream)
+    public static int? TryReadBitDepth(Stream stream) => TryReadFormat(stream)?.BitDepth;
+    public static AlacStreamInfo? TryReadFormat(Stream stream)
     {
         if (stream is null || !stream.CanSeek)
         {
             return null;
         }
 
-        return FindAlacBitDepth(stream, 0, stream.Length);
+        return FindAlacBitDepth(stream, 0, stream.Length, 0);
     }
 
-    private static int? FindAlacBitDepth(Stream stream, long start, long end)
+    private static AlacStreamInfo? FindAlacBitDepth(Stream stream, long start, long end, int depth)
     {
+        if (depth > 64) return null;
         var position = start;
         while (position + 8 <= end)
         {
@@ -55,7 +59,7 @@ internal static class AlacBitDepthReader
                 case "minf":
                 case "stbl":
                 {
-                    var result = FindAlacBitDepth(stream, contentStart, boxEnd);
+                    var result = FindAlacBitDepth(stream, contentStart, boxEnd, depth + 1);
                     if (result is not null)
                     {
                         return result;
@@ -67,7 +71,7 @@ internal static class AlacBitDepthReader
                 {
                     // stsd is a full box: 1 byte version + 3 bytes flags + 4 bytes entry count
                     // precede the sample entries.
-                    var result = FindAlacBitDepth(stream, contentStart + 8, boxEnd);
+                    var result = FindAlacBitDepth(stream, contentStart + 8, boxEnd, depth + 1);
                     if (result is not null)
                     {
                         return result;
@@ -77,7 +81,7 @@ internal static class AlacBitDepthReader
                 }
                 case "alac":
                 {
-                    var result = ReadAlacBox(stream, contentStart, boxEnd);
+                    var result = ReadAlacBox(stream, contentStart, boxEnd, depth + 1);
                     if (result is not null)
                     {
                         return result;
@@ -93,7 +97,7 @@ internal static class AlacBitDepthReader
         return null;
     }
 
-    private static int? ReadAlacBox(Stream stream, long contentStart, long boxEnd)
+    private static AlacStreamInfo? ReadAlacBox(Stream stream, long contentStart, long boxEnd, int depth)
     {
         // The 'alac' four-cc appears twice: first as the sample entry (an AudioSampleEntry whose
         // 28-byte header precedes a nested 'alac' config box), then as that config box (a full box
@@ -101,21 +105,22 @@ internal static class AlacBitDepthReader
         // the cookie (after frameLength (4 bytes) + compatibleVersion (1 byte)).
 
         // Sample-entry case: descend past the 28-byte AudioSampleEntry header to the nested box.
-        var nested = FindAlacBitDepth(stream, contentStart + 28, boxEnd);
+        var nested = FindAlacBitDepth(stream, contentStart + 28, boxEnd, depth + 1);
         if (nested is not null)
         {
             return nested;
         }
 
         // Config-box case: read the magic cookie directly.
-        var bitDepthPosition = contentStart + 4 + 5;
-        if (bitDepthPosition < boxEnd)
+        if (contentStart + 28 <= boxEnd)
         {
-            stream.Position = bitDepthPosition;
-            var value = stream.ReadByte();
-            if (value is 16 or 20 or 24 or 32)
+            stream.Position = contentStart + 4;
+            Span<byte> cookie = stackalloc byte[24];
+            if (stream.ReadAtLeast(cookie, 24, throwOnEndOfStream: false) == 24)
             {
-                return value;
+                var rate = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(cookie[20..]);
+                if (cookie[5] is 16 or 20 or 24 or 32 && rate <= int.MaxValue)
+                    return new AlacStreamInfo((int)rate, cookie[5]);
             }
         }
 

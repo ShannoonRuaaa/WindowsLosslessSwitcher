@@ -516,8 +516,8 @@ public sealed class AppUpdater : IAppUpdater
     /// <summary>
     /// Decides whether the running portable build is already up to date with the newest release.
     /// System.Version comparison alone cannot order prerelease builds against the release that
-    /// shares their version core (1.0.0-beta.1 vs 1.0.0), so equal cores fall back to comparing
-    /// the tag text: a prerelease build is only up to date when the tags match exactly.
+    /// shares their version core (1.0.0-beta.1 vs 1.0.0), so equal cores use SemVer
+    /// prerelease identifier ordering, ignoring build metadata.
     /// </summary>
     internal static bool IsPortableUpToDate(
         Version? currentVersion,
@@ -535,11 +535,29 @@ public sealed class AppUpdater : IAppUpdater
             return releaseVersion < currentVersion;
         }
 
-        return !IsPrereleaseVersionText(currentVersionText)
-            || string.Equals(
-                releaseTag.TrimStart('v', 'V'),
-                currentVersionText,
-                StringComparison.OrdinalIgnoreCase);
+        static string? Prerelease(string value)
+        {
+            var tag = value.Split('+', 2)[0];
+            var dash = tag.IndexOf('-');
+            return dash < 0 ? null : tag[(dash + 1)..];
+        }
+        var current = Prerelease(currentVersionText);
+        var release = Prerelease(releaseTag);
+        if (current is null) return true;
+        if (release is null) return false;
+        var left = current.Split('.');
+        var right = release.Split('.');
+        for (var i = 0; i < Math.Min(left.Length, right.Length); i++)
+        {
+            var leftNumeric = left[i].Length > 0 && left[i].All(char.IsAsciiDigit);
+            var rightNumeric = right[i].Length > 0 && right[i].All(char.IsAsciiDigit);
+            var comparison = leftNumeric && rightNumeric
+                ? left[i].Length.CompareTo(right[i].Length)
+                : leftNumeric != rightNumeric ? (leftNumeric ? -1 : 1) : 0;
+            if (comparison == 0) comparison = string.CompareOrdinal(left[i], right[i]);
+            if (comparison != 0) return comparison > 0;
+        }
+        return left.Length >= right.Length;
     }
 
     internal static string? InformationalVersionText

@@ -6,8 +6,13 @@ using WindowsLosslessSwitcher.Models;
 
 namespace WindowsLosslessSwitcher.Services;
 
-public sealed class AppleMusicCatalogResolver : IFormatResolver
+public sealed partial class AppleMusicCatalogResolver : IFormatResolver
 {
+    [System.Text.RegularExpressions.GeneratedRegex("src=\"(?<path>/assets/index[^\"']+\\.js)\"", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex BundleScriptRegex();
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+")]
+    private static partial System.Text.RegularExpressions.Regex DeveloperTokenRegex();
     private static readonly HttpClient SharedHttpClient = CreateHttpClient();
     internal const string DefaultStorefront = "us";
 
@@ -280,10 +285,7 @@ public sealed class AppleMusicCatalogResolver : IFormatResolver
             return null;
         }
 
-        var scriptMatch = System.Text.RegularExpressions.Regex.Match(
-            browseHtml,
-            "src=\"(?<path>/assets/index[^\"']+\\.js)\"",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var scriptMatch = BundleScriptRegex().Match(browseHtml);
         if (!scriptMatch.Success)
         {
             _logger.Warn($"Developer token unavailable: no bundle script found on the '{_storefront}' browse page.");

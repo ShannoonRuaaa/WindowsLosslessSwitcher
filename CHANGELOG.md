@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Custom intro.11 — 2026-11-14
+
+- Fixed cancellation during playback retry, missed resume events, and concurrent
+  media-session attachment; isolated settings snapshots across playback operations.
+- Made settings replacement atomic, bounded diagnostic logs, and hardened binary
+  preference parsing. Removed exclusive cache-file probes that could block playback.
+- Fixed metadata matching, prerelease update ordering, and fixed-width title scrolling.
+- Reduced visualizer idle work, combined ALAC format reads, and fixed audio enumerator disposal.
+- Updated SourceLink to remove a known vulnerable build dependency. See
+  [the audit review](AUDIT_REVIEW_2026-11-14.md) for validation and scope.
+
 ### Fixed
 
 - A track Apple Music never started is now retried once in place (pause,

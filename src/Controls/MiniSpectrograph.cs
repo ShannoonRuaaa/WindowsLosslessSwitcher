@@ -110,6 +110,9 @@ public sealed class MiniSpectrograph : FrameworkElement
         {
             InvalidateVisual();
         }
+        _timer.Interval = !active && !changed && _activity < 0.01
+            ? TimeSpan.FromMilliseconds(200)
+            : TimeSpan.FromMilliseconds(33);
     }
 
     protected override void OnRender(DrawingContext drawingContext)

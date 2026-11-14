@@ -8,13 +8,14 @@ public sealed record TrackFormatCorrection(string Title, string Artist, string A
     public static IReadOnlyList<int> SupportedRates { get; } =
         [44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000];
 
-    public bool IsValid => !string.IsNullOrWhiteSpace(Title) && !string.IsNullOrWhiteSpace(Artist) &&
-        !string.IsNullOrWhiteSpace(Album) && SupportedRates.Contains(SampleRateHz) && BitDepth is 16 or 24 or 32;
+    public bool IsValid => HasIdentity(Title) && HasIdentity(Artist) &&
+        SupportedRates.Contains(SampleRateHz) && BitDepth is 16 or 24 or 32;
 
     public bool Matches(TrackSnapshot track)
     {
         var normalized = AppleMusicTrackMetadataNormalizer.NormalizeSnapshot(track);
-        return IsValid && Equal(Title, normalized.Title) && Equal(Artist, normalized.Artist) && Equal(Album, normalized.Album);
+        return IsValid && Equal(Title, normalized.Title) && Equal(Artist, normalized.Artist) &&
+            ((string.IsNullOrWhiteSpace(Album) && string.IsNullOrWhiteSpace(normalized.Album)) || Equal(Album, normalized.Album));
     }
 
     public static TrackFormatCorrection FromTrack(TrackSnapshot track, int sampleRateHz, int bitDepth)
@@ -32,7 +33,10 @@ public sealed record TrackFormatCorrection(string Title, string Artist, string A
     }
 
     private static bool Equal(string? left, string? right) =>
-        !string.IsNullOrWhiteSpace(right) &&
+        HasIdentity(left) && HasIdentity(right) &&
         AppleMusicTrackMetadataNormalizer.NormalizeForComparison(left) ==
         AppleMusicTrackMetadataNormalizer.NormalizeForComparison(right);
+
+    private static bool HasIdentity(string? value) =>
+        AppleMusicTrackMetadataNormalizer.NormalizeForComparison(value).Length > 0;
 }

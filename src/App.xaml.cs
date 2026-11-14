@@ -74,7 +74,7 @@ public partial class App : Application
         if (_settings.KeepOutputFormatFixed)
         {
             _settings.KeepOutputFormatFixed = false;
-            _settingsService.Save(_settings);
+            SaveSettings();
         }
         _logger.VerboseEnabled = _settings.EnableVerboseDiagnostics;
         _viewModel.SelectedMode = _settings.DeviceSelectionMode;
@@ -143,7 +143,7 @@ public partial class App : Application
                     audioEndpointController,
                     new PlayCacheTrackFormatReader(_paths, _logger),
                     _logger,
-                    () => DeviceTargetingPolicy.GetCurrentTargetDevice(_settings!, audioEndpointController)),
+                    () => DeviceTargetingPolicy.GetCurrentTargetDevice(_coordinator?.Settings ?? _settings!, audioEndpointController)),
                 new TierFallbackResolver(_paths, _plistReader, _logger),
             ]);
 
@@ -213,9 +213,21 @@ public partial class App : Application
         Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         _instanceGuard.ActivationRequested -= OnActivationRequested;
         _instanceGuard.Dispose();
+        _logger.Dispose();
         base.OnExit(e);
     }
 
+    private void SaveSettings()
+    {
+        if (_settings is null) return;
+        try { _settingsService.Save(_settings); }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            _logger.Error("Settings could not be saved; the previous file was preserved.", ex);
+            System.Windows.MessageBox.Show("Your settings could not be saved. Your previous saved settings are intact. Please check that the settings folder is writable and try again.",
+                "Windows Lossless Switcher", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
     private void OnActivationRequested(object? sender, EventArgs e) => Dispatcher.BeginInvoke(ShowMainWindow);
 
     private void OnSystemAppearanceChanged(object? sender, PropertyChangedEventArgs e)
@@ -293,7 +305,7 @@ public partial class App : Application
         if (!correction.IsValid) return;
         _settings.TrackFormatCorrections = _settings.TrackFormatCorrections
             .Where(existing => existing is not null && !existing.Matches(track)).Append(correction).ToList();
-        _settingsService.Save(_settings);
+        SaveSettings();
         _coordinator?.UpdateSettings(_settings);
         _coordinator?.ReprocessTrack(track);
     }
@@ -304,7 +316,7 @@ public partial class App : Application
         if (_settings is null || track is null || _latestStatus?.Track?.UniqueKey != track.UniqueKey) return;
         _settings.TrackFormatCorrections = _settings.TrackFormatCorrections
             .Where(existing => existing is not null && !existing.Matches(track)).ToList();
-        _settingsService.Save(_settings);
+        SaveSettings();
         _coordinator?.UpdateSettings(_settings);
         _coordinator?.ReprocessTrack(track);
     }
@@ -388,7 +400,7 @@ public partial class App : Application
         _settings.RestartAppleMusicOnPlaybackFailure = _viewModel.RestartAppleMusicOnPlaybackFailure;
         _settings.AllowedSampleRates = _viewModel.AllowedSampleRates.ToList();
         _settings.AllowedBitDepths = _viewModel.AllowedBitDepths.ToList();
-        _settingsService.Save(_settings);
+        SaveSettings();
         _logger.VerboseEnabled = _settings.EnableVerboseDiagnostics;
         _coordinator?.UpdateSettings(_settings);
         if (e.PropertyName == nameof(MainWindowViewModel.KeepOutputFormatFixed) && _latestStatus?.Track is { } currentTrack)
@@ -488,7 +500,7 @@ public partial class App : Application
             snapshot.Format.BitDepth,
             snapshot.Format.Channels,
             DateTimeOffset.UtcNow);
-        _settingsService.Save(_settings);
+        SaveSettings();
         _logger.Info($"Captured original target format {snapshot.Format.DisplayName} for {snapshot.DeviceName ?? snapshot.DeviceId}.");
         _viewModel.AddActivity($"Original format captured: {AudioFormatTextFormatter.Format(snapshot.Format)}");
         UpdateOriginalFormatRestoreState();

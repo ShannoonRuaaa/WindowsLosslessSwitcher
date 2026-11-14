@@ -28,14 +28,14 @@ try {
     & $DotNetPath publish ./src/WindowsLosslessSwitcher.csproj -c Release -r $Runtime --self-contained true `
         -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
         -p:PublishReadyToRun=true -p:PublishTrimmed=false -p:EnableCompressionInSingleFile=false `
-        -p:WlsAppVersion=1.0.0-intro.10 -p:WlsAssemblyVersion=1.0.0.10 -p:WlsEnableUpdates=false `
+        -p:WlsAppVersion=1.0.0-intro.11 -p:WlsAssemblyVersion=1.0.0.11 -p:WlsEnableUpdates=false `
         -o $outputDirectory
     if ($LASTEXITCODE -ne 0) { throw 'Publishing failed.' }
     if ($Runtime -eq 'win-x64') {
         & $DotNetPath run --project ./tests/WindowsLosslessSwitcher.UiVerification/WindowsLosslessSwitcher.UiVerification.csproj -c Release
         if ($LASTEXITCODE -ne 0) { throw 'Release UI verification failed.' }
     }
-    Copy-Item -LiteralPath ./LICENSE, ./THIRD_PARTY_NOTICES.md, ./OPTIMIZATION_NOTES.md -Destination $outputDirectory
+    Copy-Item -LiteralPath ./LICENSE, ./THIRD_PARTY_NOTICES.md, ./OPTIMIZATION_NOTES.md, ./AUDIT_REVIEW_2026-11-14.md -Destination $outputDirectory
     Write-Host "Built: $(Join-Path $outputDirectory 'WindowsLosslessSwitcher.exe')"
 }
 finally {

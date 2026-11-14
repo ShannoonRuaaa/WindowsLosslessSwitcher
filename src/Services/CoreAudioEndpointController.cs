@@ -373,7 +373,7 @@ public sealed class CoreAudioEndpointController : IAudioEndpointController
 
     private static MMDevice GetDevice(string deviceId)
     {
-        var enumerator = new MMDeviceEnumerator();
+        using var enumerator = new MMDeviceEnumerator();
         return enumerator.GetDevice(deviceId);
     }
 

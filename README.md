@@ -1,5 +1,9 @@
 # Windows Lossless Switcher
 
+> Custom intro.11 includes playback recovery, settings persistence, parser safety,
+> cache access, and UI fixes. See [the audit review](AUDIT_REVIEW_2026-11-14.md)
+> for finding dispositions, validation results, and deferred optimizations.
+
 > This source includes an independent intro-preserving custom build. See
 > [OPTIMIZATION_NOTES.md](OPTIMIZATION_NOTES.md) for the changes, limitations, and
 > `Build-Optimized.ps1` instructions. The upstream documentation below describes the
