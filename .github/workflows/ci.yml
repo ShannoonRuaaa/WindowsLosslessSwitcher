@@ -4,11 +4,21 @@ on:
   push:
     branches:
       - main
+      - 'codex/**'
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   validate:
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -31,6 +41,7 @@ jobs:
   package-smoke:
     needs: validate
     runs-on: windows-latest
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
@@ -87,3 +98,20 @@ jobs:
               throw "Expected packaged asset was not produced: $file"
             }
           }
+
+  custom-ui:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish custom build and verify WPF
+        shell: pwsh
+        run: ./Build-Optimized.ps1 -SkipTests
