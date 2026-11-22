@@ -688,7 +688,7 @@ public sealed class AppleMusicCatalogResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_LossyOnlySong_ResolvesAac441AndCachesIt()
+    public async Task ResolveAsync_LossyOnlySong_DoesNotInventExactRateOrCacheIt()
     {
         var (resolver, store, directory) = CreateResolverForSong(
             traits: ["lossy-stereo"], enhancedHls: null, manifest: null);
@@ -698,13 +698,8 @@ public sealed class AppleMusicCatalogResolverTests
 
             var result = await resolver.ResolveAsync(track, CancellationToken.None);
 
-            Assert.NotNull(result);
-            Assert.Equal(ResolutionConfidence.Exact, result.Confidence);
-            Assert.Equal(44100, result.SampleRateHz);
-            Assert.True(store.TryGet(FormatCacheKey.Create("us", track), out var entry));
-            Assert.NotNull(entry);
-            Assert.False(entry.NoMatch);
-            Assert.Equal(44100, entry.SampleRateHz);
+            Assert.Null(result);
+            Assert.False(store.TryGet(FormatCacheKey.Create("us", track), out _));
         }
         finally
         {
@@ -731,7 +726,7 @@ public sealed class AppleMusicCatalogResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_HiResSongWhoseManifestStopsAt48k_IsNotCappedAt48k()
+    public async Task ResolveAsync_HiResSongWhoseManifestStopsAt48k_DoesNotInventNativeRate()
     {
         var (resolver, _, directory) = CreateResolverForSong(
             traits: ["hi-res-lossless", "lossless", "lossy-stereo"],
@@ -745,9 +740,7 @@ public sealed class AppleMusicCatalogResolverTests
         {
             var result = await resolver.ResolveAsync(CreateTrack("Track", "Artist"), CancellationToken.None);
 
-            Assert.NotNull(result);
-            Assert.Equal(AppleMusicCatalogResolver.AssumedHiResSampleRateHz, result.SampleRateHz);
-            Assert.Equal(24, result.BitDepth);
+            Assert.Null(result);
         }
         finally
         {

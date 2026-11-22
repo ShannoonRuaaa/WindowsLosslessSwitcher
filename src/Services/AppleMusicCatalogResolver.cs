@@ -224,30 +224,6 @@ public sealed partial class AppleMusicCatalogResolver : IFormatResolver
             _logger.Info(
                 $"Catalog resolver found no enhanced HLS manifest for {normalizedTrack.UniqueKey} " +
                 $"(traits: {(songDetail.AudioTraits.Count == 0 ? "none" : string.Join(", ", songDetail.AudioTraits))}).");
-            if (IsLossyOnly(songDetail.AudioTraits))
-            {
-                // Matched, and the catalog says there is no lossless version: Apple Music streams
-                // its AAC master, which is always 44.1 kHz. Treating this as "undetermined" kept
-                // the previous track's rate (e.g. 96 kHz) for the whole song, after holding the
-                // mute through a pointless 2.5 s local-file retry.
-                var aac = new ResolvedAudioFormat(
-                    AacStreamSampleRateHz,
-                    16,
-                    ResolutionConfidence.Exact,
-                    AudioFormatSource.CatalogManifest,
-                    $"Catalog: AAC only (no lossless version), {AacStreamSampleRateHz / 1000.0:0.###} kHz")
-                {
-                    ObservedAtUtc = DateTimeOffset.UtcNow,
-                    CatalogSongId = songDetail.Id,
-                };
-                if (cacheKey is not null)
-                {
-                    _formatCacheStore!.Store(cacheKey, aac);
-                }
-
-                return aac;
-            }
-
             if (songDetail.AudioTraits.Count == 0 && cacheKey is not null)
             {
                 // Nothing says this song has a lossless master — durable.
@@ -276,21 +252,11 @@ public sealed partial class AppleMusicCatalogResolver : IFormatResolver
         var description = $"Catalog manifest: {bitDepth}/{sampleRateHz / 1000.0:0.###}";
         if (sampleRateHz <= StandardLosslessMaxSampleRateHz && HasTrait(songDetail.AudioTraits, HiResLosslessTrait))
         {
-            // Apple only tags a song hi-res-lossless when it has a variant above 48 kHz, but the
-            // web-token enhancedHls master omits that variant for many songs (verified live
-            // 2026-11-21: a hi-res-tagged song's master listed a single ALAC group,
-            // audio-alac-stereo-48000-24, while the native app plays hi-res). Field logs: 48 of
-            // 109 hi-res songs resolved to 24/48 this way (e.g. tracks that really play at 24/96
-            // and 24/192), forcing the device below the stream's rate. The true rate is not
-            // available from this source; 96 kHz is by far the most common hi-res master, and a
-            // native-format correction overrides it per track.
-            _logger.Warn(
-                $"Catalog resolver: {songDetail.Id} ({normalizedTrack.UniqueKey}) is tagged {HiResLosslessTrait} but its manifest " +
-                $"listed nothing above {bitDepth}/{sampleRateHz}; assuming 24/{AssumedHiResSampleRateHz}. " +
-                $"Manifest excerpt: {DescribeManifestForDiagnostics(manifest)}");
-            sampleRateHz = AssumedHiResSampleRateHz;
-            bitDepth = 24;
-            description = $"Catalog: hi-res lossless (manifest rate not listed; assuming 24/{AssumedHiResSampleRateHz / 1000.0:0.###})";
+            // A hi-res tier cannot tell us whether the native recording is 88.2, 96,
+            // 176.4 or 192 kHz. An incomplete web manifest is not an exact native format.
+            // Let local-file resolution or a user-verified correction supply that evidence.
+            _logger.Warn($"Catalog {songDetail.Id} is tagged hi-res but its manifest lists only {bitDepth}/{sampleRateHz}; native format remains undetermined.");
+            return null;
         }
 
         _logger.Info(
@@ -524,10 +490,10 @@ public sealed partial class AppleMusicCatalogResolver : IFormatResolver
     internal const string HiResLosslessTrait = "hi-res-lossless";
     private const string LosslessTrait = "lossless";
     private const int StandardLosslessMaxSampleRateHz = 48000;
-    internal const int AssumedHiResSampleRateHz = 96000;
 
-    // Apple Music's AAC (iTunes Plus) masters are 44.1 kHz.
-    internal const int AacStreamSampleRateHz = 44100;
+
+
+
 
     private static bool HasTrait(IReadOnlyList<string> traits, string trait) =>
         traits.Any(value => string.Equals(value, trait, StringComparison.OrdinalIgnoreCase));

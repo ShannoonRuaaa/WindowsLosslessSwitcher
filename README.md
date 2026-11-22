@@ -1,5 +1,10 @@
 # Windows Lossless Switcher
 
+> Custom intro.12 adds earlier protective muting, improved restart observation,
+> and uninterrupted mid-song attachment. Missing native rates remain undetermined;
+> hi-res tier labels and AAC availability are not exact sample-rate measurements.
+> Intro replay is best-effort and may remain unavailable for some player sessions.
+>
 > Custom intro.11 includes playback recovery, settings persistence, parser safety,
 > cache access, and UI fixes. See [the audit review](AUDIT_REVIEW_2026-11-14.md)
 > for finding dispositions, validation results, and deferred optimizations.

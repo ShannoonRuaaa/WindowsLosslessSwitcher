@@ -28,7 +28,7 @@ try {
     & $DotNetPath publish ./src/WindowsLosslessSwitcher.csproj -c Release -r $Runtime --self-contained true `
         -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
         -p:PublishReadyToRun=true -p:PublishTrimmed=false -p:EnableCompressionInSingleFile=false `
-        -p:WlsAppVersion=1.0.0-intro.11 -p:WlsAssemblyVersion=1.0.0.11 -p:WlsEnableUpdates=false `
+        -p:WlsAppVersion=1.0.0-intro.12 -p:WlsAssemblyVersion=1.0.0.12 -p:WlsEnableUpdates=false `
         -o $outputDirectory
     if ($LASTEXITCODE -ne 0) { throw 'Publishing failed.' }
     if ($Runtime -eq 'win-x64') {

@@ -84,13 +84,11 @@ internal static class TrackRestartController
 
         if (!snapshot.CanPrevious)
         {
-            // Apple Music reports Previous as unavailable for some queues (seen live on half of
-            // the restarts after install). Past 5 s, Previous restarts the current recording;
-            // if it is really disabled the command is simply rejected, and the confirmation
-            // below verifies the same recording is back at the start either way.
-            log?.Invoke($"Previous is reported unavailable at {snapshot.Position}; sending it anyway and verifying the result");
+            // Recent field logs contain no confirmed restart from this path. Respect the
+            // player's disabled control instead of sending a command that may change its queue.
+            log?.Invoke("restart skipped: Previous is unavailable; continuing at the current position");
+            return false;
         }
-
         before = snapshot.Position;
         if (!await previous(cancellationToken))
         {

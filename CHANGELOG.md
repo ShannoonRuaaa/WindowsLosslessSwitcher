@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Custom intro.12 — 2026-11-22
+
+- Start format lookup before device selection and mute the previous endpoint earlier
+  when a switch may be needed. Known matching formats retain uninterrupted playback.
+- Replay a long silenced opening after a no-switch lookup, and avoid replaying tracks
+  joined mid-song. Observe delayed pause and restart state with bounded waits.
+- Parse additional ALAC manifest layouts. Leave native rates undetermined when the
+  evidence is incomplete, rather than treating guessed 44.1/96 kHz rates as exact.
+- Respect unavailable Previous controls; local logs did not confirm any restart from
+  sending that command while disabled. Native restart remains best-effort.
+- Invalidate older catalog cache entries, including entries containing assumed rates.
+
 ### Custom intro.11 — 2026-11-14
 
 - Fixed cancellation during playback retry, missed resume events, and concurrent

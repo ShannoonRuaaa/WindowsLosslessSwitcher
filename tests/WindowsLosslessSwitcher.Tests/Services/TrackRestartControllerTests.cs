@@ -142,7 +142,7 @@ public sealed class TrackRestartControllerTests
     }
 
     [Fact]
-    public async Task PreviousReportedUnavailable_IsStillTriedPastFiveSecondsAndVerified()
+    public async Task PreviousReportedUnavailable_IsNotSentEvenPastFiveSeconds()
     {
         var snapshot = Snapshot(7) with { CanPrevious = false };
         var previous = 0;
@@ -150,8 +150,8 @@ public sealed class TrackRestartControllerTests
             _ => Task.FromResult(false),
             _ => { previous++; snapshot = snapshot with { Position = TimeSpan.Zero }; return Task.FromResult(true); },
             CancellationToken.None);
-        Assert.True(result);
-        Assert.Equal(1, previous);
+        Assert.False(result);
+        Assert.Equal(0, previous);
     }
 
     [Fact]
