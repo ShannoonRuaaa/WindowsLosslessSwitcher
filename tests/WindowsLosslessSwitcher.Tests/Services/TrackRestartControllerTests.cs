@@ -94,6 +94,90 @@ public sealed class TrackRestartControllerTests
         Assert.Equal(0, commands);
     }
 
+    [Fact]
+    public async Task PauseNotYetReflected_WaitsForPausedStatusInsteadOfGivingUp()
+    {
+        var reads = 0;
+        var previous = 0;
+        var position = TimeSpan.FromSeconds(6);
+        var result = await TrackRestartController.TryRestartAsync("song",
+            _ => Task.FromResult(new RestartPlaybackSnapshot("song", position, false, true, IsPaused: ++reads > 2)),
+            _ => Task.FromResult(false),
+            _ => { previous++; position = TimeSpan.Zero; return Task.FromResult(true); },
+            CancellationToken.None);
+        Assert.True(result);
+        Assert.Equal(1, previous);
+    }
+
+    [Fact]
+    public async Task PreviousThatAutoResumesNearTheStart_CountsAsRestart()
+    {
+        var snapshot = Snapshot(8);
+        var result = await TrackRestartController.TryRestartAsync("song", _ => Task.FromResult(snapshot),
+            _ => Task.FromResult(false),
+            _ => { snapshot = snapshot with { Position = TimeSpan.FromSeconds(1), IsPaused = false }; return Task.FromResult(true); },
+            CancellationToken.None);
+        Assert.True(result);
+    }
+
+    [Fact]
+    public async Task TransientPlaceholderAfterPrevious_IsNotAVerdict()
+    {
+        var snapshot = Snapshot(8);
+        var confirmReads = 0;
+        var result = await TrackRestartController.TryRestartAsync("song",
+            _ =>
+            {
+                if (snapshot.Position == TimeSpan.Zero && confirmReads++ < 2)
+                {
+                    return Task.FromResult(snapshot with { TrackKey = "Connecting…" });
+                }
+
+                return Task.FromResult(snapshot);
+            },
+            _ => Task.FromResult(false),
+            _ => { snapshot = snapshot with { Position = TimeSpan.Zero }; return Task.FromResult(true); },
+            CancellationToken.None);
+        Assert.True(result);
+    }
+
+    [Fact]
+    public async Task PreviousReportedUnavailable_IsStillTriedPastFiveSecondsAndVerified()
+    {
+        var snapshot = Snapshot(7) with { CanPrevious = false };
+        var previous = 0;
+        var result = await TrackRestartController.TryRestartAsync("song", _ => Task.FromResult(snapshot),
+            _ => Task.FromResult(false),
+            _ => { previous++; snapshot = snapshot with { Position = TimeSpan.Zero }; return Task.FromResult(true); },
+            CancellationToken.None);
+        Assert.True(result);
+        Assert.Equal(1, previous);
+    }
+
+    [Fact]
+    public async Task PreviousReportedUnavailable_IsNeverTriedBeforeFiveSeconds()
+    {
+        var previous = 0;
+        var result = await TrackRestartController.TryRestartAsync("song",
+            _ => Task.FromResult(Snapshot(3) with { CanPrevious = false }),
+            _ => Task.FromResult(false),
+            _ => { previous++; return Task.FromResult(true); },
+            CancellationToken.None);
+        Assert.False(result);
+        Assert.Equal(0, previous);
+    }
+
+    [Fact]
+    public async Task SlightlyLowerPositionAfterPrevious_IsNotMistakenForRestart()
+    {
+        var snapshot = Snapshot(5);
+        var result = await TrackRestartController.TryRestartAsync("song", _ => Task.FromResult(snapshot),
+            _ => Task.FromResult(false),
+            _ => { snapshot = snapshot with { Position = TimeSpan.FromSeconds(4) }; return Task.FromResult(true); },
+            CancellationToken.None, TimeSpan.Zero);
+        Assert.False(result);
+    }
+
     private static RestartPlaybackSnapshot Snapshot(double seconds, bool canSeek = false) =>
         new("song", TimeSpan.FromSeconds(seconds), canSeek, true, true);
 }

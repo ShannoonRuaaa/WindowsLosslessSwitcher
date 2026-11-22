@@ -609,6 +609,247 @@ public sealed class AppleMusicCatalogResolverTests
     private static DiagnosticsLogger CreateLogger() =>
         new(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
 
+    // ── Manifest variants described in other shapes (mismatch fixes) ─────────
+
+    [Fact]
+    public void TryGetHighestLosslessVariant_AcceptsAnyAttributeOrderAndQuotedValues()
+    {
+        const string manifest = """
+            #EXTM3U
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-alac-stereo-48000-24",SAMPLE-RATE=48000,BIT-DEPTH=24
+            #EXT-X-MEDIA:GROUP-ID="hi",NAME="Hi-Res",TYPE=AUDIO,BIT-DEPTH="24",SAMPLE-RATE="96000"
+            """;
+
+        Assert.True(AppleMusicCatalogResolver.TryGetHighestLosslessVariant(manifest, out var rate, out var depth));
+        Assert.Equal(96000, rate);
+        Assert.Equal(24, depth);
+    }
+
+    [Fact]
+    public void TryGetHighestLosslessVariant_ReadsRateFromAlacGroupIds()
+    {
+        const string manifest = """
+            #EXTM3U
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-alac-stereo-48000-24",SAMPLE-RATE=48000,BIT-DEPTH=24
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-alac-stereo-192000-24",NAME="ALAC",CHANNELS="2"
+            #EXT-X-STREAM-INF:BANDWIDTH=5000000,CODECS="alac",AUDIO="audio-alac-stereo-192000-24"
+            """;
+
+        Assert.True(AppleMusicCatalogResolver.TryGetHighestLosslessVariant(manifest, out var rate, out var depth));
+        Assert.Equal(192000, rate);
+        Assert.Equal(24, depth);
+    }
+
+    [Fact]
+    public void TryGetHighestLosslessVariant_ReadsStreamInfAudioGroupWhenMediaLineHasNoRate()
+    {
+        const string manifest = """
+            #EXTM3U
+            #EXT-X-MEDIA:TYPE=AUDIO,SAMPLE-RATE=44100,BIT-DEPTH=16
+            #EXT-X-STREAM-INF:BANDWIDTH=3000000,CODECS="alac",AUDIO="audio-alac-stereo-88200-24"
+            """;
+
+        Assert.True(AppleMusicCatalogResolver.TryGetHighestLosslessVariant(manifest, out var rate, out var depth));
+        Assert.Equal(88200, rate);
+        Assert.Equal(24, depth);
+    }
+
+    [Fact]
+    public void TryGetHighestLosslessVariant_ReadsAlacEntriesFromSessionAssetMetadata()
+    {
+        var metadata = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+            """{"a":{"AUDIO-FORMAT-ID":"alac","SAMPLE-RATE":176400,"BIT-DEPTH":24},"b":{"AUDIO-FORMAT-ID":"ec+3","SAMPLE-RATE":768000,"BIT-DEPTH":32}}"""));
+        var manifest = $"""
+            #EXTM3U
+            #EXT-X-SESSION-DATA:DATA-ID="com.apple.hls.audioAssetMetadata",VALUE="{metadata}"
+            #EXT-X-MEDIA:TYPE=AUDIO,SAMPLE-RATE=48000,BIT-DEPTH=24
+            """;
+
+        Assert.True(AppleMusicCatalogResolver.TryGetHighestLosslessVariant(manifest, out var rate, out var depth));
+        Assert.Equal(176400, rate); // the non-ALAC (Atmos) entry is ignored
+        Assert.Equal(24, depth);
+    }
+
+    [Fact]
+    public void TryGetHighestLosslessVariant_IgnoresAtmosAacAndBinauralGroups()
+    {
+        const string manifest = """
+            #EXTM3U
+            #EXT-X-MEDIA:TYPE=AUDIO,SAMPLE-RATE=44100,BIT-DEPTH=16
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-atmos-2768",CHANNELS="16/JOC",SAMPLE-RATE=48000
+            #EXT-X-STREAM-INF:BANDWIDTH=256000,CODECS="mp4a.40.2",AUDIO="audio-stereo-256"
+            #EXT-X-STREAM-INF:BANDWIDTH=256000,CODECS="mp4a.40.2",AUDIO="audio-stereo-binaural-48000-24"
+            #EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="alac-192000-24",SAMPLE-RATE=192000,BIT-DEPTH=24
+            """;
+
+        Assert.True(AppleMusicCatalogResolver.TryGetHighestLosslessVariant(manifest, out var rate, out var depth));
+        Assert.Equal(44100, rate);
+        Assert.Equal(16, depth);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_LossyOnlySong_ResolvesAac441AndCachesIt()
+    {
+        var (resolver, store, directory) = CreateResolverForSong(
+            traits: ["lossy-stereo"], enhancedHls: null, manifest: null);
+        try
+        {
+            var track = CreateTrack("Track", "Artist");
+
+            var result = await resolver.ResolveAsync(track, CancellationToken.None);
+
+            Assert.NotNull(result);
+            Assert.Equal(ResolutionConfidence.Exact, result.Confidence);
+            Assert.Equal(44100, result.SampleRateHz);
+            Assert.True(store.TryGet(FormatCacheKey.Create("us", track), out var entry));
+            Assert.NotNull(entry);
+            Assert.False(entry.NoMatch);
+            Assert.Equal(44100, entry.SampleRateHz);
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task ResolveAsync_LosslessTraitsWithoutManifest_DoesNotCacheNegative()
+    {
+        var (resolver, store, directory) = CreateResolverForSong(
+            traits: ["lossless", "lossy-stereo"], enhancedHls: null, manifest: null);
+        try
+        {
+            var track = CreateTrack("Track", "Artist");
+
+            Assert.Null(await resolver.ResolveAsync(track, CancellationToken.None));
+            Assert.False(store.TryGet(FormatCacheKey.Create("us", track), out _));
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task ResolveAsync_HiResSongWhoseManifestStopsAt48k_IsNotCappedAt48k()
+    {
+        var (resolver, _, directory) = CreateResolverForSong(
+            traits: ["hi-res-lossless", "lossless", "lossy-stereo"],
+            enhancedHls: "https://example.com/manifest.m3u8",
+            manifest: """
+                #EXTM3U
+                #EXT-X-MEDIA:TYPE=AUDIO,SAMPLE-RATE=44100,BIT-DEPTH=16
+                #EXT-X-MEDIA:TYPE=AUDIO,SAMPLE-RATE=48000,BIT-DEPTH=24
+                """);
+        try
+        {
+            var result = await resolver.ResolveAsync(CreateTrack("Track", "Artist"), CancellationToken.None);
+
+            Assert.NotNull(result);
+            Assert.Equal(AppleMusicCatalogResolver.AssumedHiResSampleRateHz, result.SampleRateHz);
+            Assert.Equal(24, result.BitDepth);
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task ResolveAsync_HiResSongWithParsedHiResVariant_KeepsManifestRate()
+    {
+        var (resolver, _, directory) = CreateResolverForSong(
+            traits: ["hi-res-lossless", "lossless"],
+            enhancedHls: "https://example.com/manifest.m3u8",
+            manifest: """
+                #EXTM3U
+                #EXT-X-MEDIA:TYPE=AUDIO,SAMPLE-RATE=48000,BIT-DEPTH=24
+                #EXT-X-STREAM-INF:BANDWIDTH=9000000,CODECS="alac",AUDIO="audio-alac-stereo-192000-24"
+                """);
+        try
+        {
+            var result = await resolver.ResolveAsync(CreateTrack("Track", "Artist"), CancellationToken.None);
+
+            Assert.NotNull(result);
+            Assert.Equal(192000, result.SampleRateHz);
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    private static (AppleMusicCatalogResolver Resolver, FormatCacheStore Store, string Directory) CreateResolverForSong(
+        string[] traits,
+        string? enhancedHls,
+        string? manifest)
+    {
+        var expiry = DateTimeOffset.UtcNow.AddHours(6).ToUnixTimeSeconds();
+        var payload = Base64UrlEncode(JsonSerializer.Serialize(new { exp = expiry }));
+        var fakeJwt = $"eyJhbGciOiJFUzI1NiJ9.{payload}.sig";
+        var songDetailResponse = JsonSerializer.Serialize(new
+        {
+            data = new[]
+            {
+                new
+                {
+                    id = "12345",
+                    attributes = enhancedHls is null
+                        ? (object)new { audioTraits = traits }
+                        : new { audioTraits = traits, extendedAssetUrls = new { enhancedHls } },
+                },
+            },
+        });
+
+        Task<string?> SendAsync(HttpRequestMessage request, CancellationToken _)
+        {
+            var uri = request.RequestUri!;
+            if (uri.AbsolutePath.EndsWith("browse", StringComparison.Ordinal))
+            {
+                return Task.FromResult<string?>("<html><script src=\"/assets/index-abc123.js\"></script></html>");
+            }
+
+            if (uri.Host == "example.com")
+            {
+                return Task.FromResult(manifest);
+            }
+
+            if (uri.AbsolutePath.Contains("/search", StringComparison.Ordinal))
+            {
+                return Task.FromResult<string?>(BuildSearchResponse("Track", "Artist", "Album"));
+            }
+
+            if (uri.AbsolutePath.Contains("/songs/", StringComparison.Ordinal))
+            {
+                return Task.FromResult<string?>(songDetailResponse);
+            }
+
+            return Task.FromResult<string?>($"var t = '{fakeJwt}';");
+        }
+
+        var directory = Path.Combine(Path.GetTempPath(), "WindowsLosslessSwitcher.Tests", Guid.NewGuid().ToString("N"));
+        var logger = new DiagnosticsLogger(directory);
+        var store = new FormatCacheStore(Path.Combine(directory, "format-cache.json"), logger);
+        return (new AppleMusicCatalogResolver(logger, store, SendAsync, "us"), store, directory);
+    }
+
+    private static void DeleteDirectory(string directory)
+    {
+        try
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     private static TrackSnapshot CreateTrack(string title, string artist, string album = "Album") =>
         new(
             "AppleInc.AppleMusicWin_nzyj5cx40ttqa",

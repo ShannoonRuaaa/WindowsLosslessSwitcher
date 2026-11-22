@@ -305,19 +305,12 @@ public sealed class AppleMusicTrackSource : ITrackSource, IMediaTransportControl
         }
     }
 
-    public TimeSpan MinimumRestartPosition
-    {
-        get
-        {
-            try
-            {
-                var controls = GetPreferredCommandSession()?.GetPlaybackInfo().Controls;
-                return controls?.IsPlaybackPositionEnabled != true && controls?.IsPreviousEnabled == true
-                    ? TrackRestartController.SafePreviousPosition : TimeSpan.Zero;
-            }
-            catch { return TimeSpan.Zero; }
-        }
-    }
+    // Apple Music never honors GSMTC seeks, even while advertising IsPlaybackPositionEnabled:
+    // field logs show 56/56 seek commands rejected and 0/93 intro restarts succeeding when the
+    // restart was attempted before 5 s, versus most succeeding at or after 5 s (via Previous).
+    // Its controls also flicker right after a track change, so gating on them sent the restart
+    // too early and the intro was lost. Always wait until Previous restarts the recording safely.
+    public TimeSpan MinimumRestartPosition => TrackRestartController.SafePreviousPosition;
 
     public async Task<bool> TryRestartCurrentTrackAsync(string expectedTrackKey, CancellationToken cancellationToken)
     {
@@ -339,7 +332,8 @@ public sealed class AppleMusicTrackSource : ITrackSource, IMediaTransportControl
                 },
                 token => { token.ThrowIfCancellationRequested(); return session.TryChangePlaybackPositionAsync(0).AsTask(token); },
                 token => { token.ThrowIfCancellationRequested(); return session.TrySkipPreviousAsync().AsTask(token); },
-                cancellationToken);
+                cancellationToken,
+                log: message => _logger.Info($"Intro restart: {message}."));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -470,7 +464,7 @@ public sealed class AppleMusicTrackSource : ITrackSource, IMediaTransportControl
         _logger.Info($"Attaching Apple Music session {candidate.SourceAppUserModelId}. lastTrack={_lastTrackKey ?? "none"}.");
         _attachedSession.MediaPropertiesChanged += OnMediaPropertiesChanged;
         _attachedSession.PlaybackInfoChanged += OnPlaybackInfoChanged;
-        await RefreshSessionFromPropertiesAsync(_attachedSession, "session-attached", publishTrackSnapshot: true);
+        await RefreshSessionFromPropertiesAsync(_attachedSession, TrackDetectionReasons.SessionAttached, publishTrackSnapshot: true);
     }
 
     private Task DetachSessionAsync()

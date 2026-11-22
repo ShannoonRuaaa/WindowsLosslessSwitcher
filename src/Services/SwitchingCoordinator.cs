@@ -197,6 +197,9 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
     // (or during disposal after all track tasks have completed).
     private string? _mutedDeviceId;
 
+    // When the coordinator's current mute began (same locking rules as _mutedDeviceId).
+    private DateTimeOffset _mutedSinceUtc;
+
     // True while playback is paused by the coordinator (not by the user). Lets a superseding
     // track's processing inherit the paused state and guarantee a resume once it finishes.
     private bool _transportPausedByCoordinator;
@@ -375,7 +378,8 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
     }
 
     /// <summary>Re-evaluates the current track after a native-format correction is saved.</summary>
-    public void ReprocessTrack(TrackSnapshot track) => OnTrackChanged(this, track);
+    public void ReprocessTrack(TrackSnapshot track) =>
+        OnTrackChanged(this, track with { DetectionReason = TrackDetectionReasons.Reprocess });
 
     public async ValueTask DisposeAsync()
     {
@@ -607,11 +611,37 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
             cancellationToken.ThrowIfCancellationRequested();
             _logger.Info($"Processing track {track.UniqueKey} detected at {track.DetectedAtUtc:O}.", correlation);
 
+            if (EffectiveSettings.RewindAfterFormatSwitch && IsJoinedMidPlay(track, out var joinedAt))
+            {
+                // The listener has been hearing this song all along (app start, or a correction
+                // saved mid-song): there is no unheard intro to protect, so muting the lookup and
+                // jumping back to 0:00 would only interrupt it. Switch like the no-replay mode:
+                // audible until the device change, muted only across it. Scoped to this
+                // processing's settings snapshot; the user's setting is untouched.
+                _processingSettings.Value!.RewindAfterFormatSwitch = false;
+                _logger.Info(
+                    $"Joined the track mid-play at {joinedAt} ({track.DetectionReason}); switching without muting the lookup or replaying the intro.",
+                    correlation);
+            }
+
             stage = TrackProcessingStage.TrackChangePause;
             if (_transportPausedByCoordinator)
             {
                 pausedPlayback = true;
                 _logger.Info("Inheriting coordinator-paused playback from a superseded track.", correlation);
+            }
+
+            // Start the lookup before device selection: it does not depend on the endpoint, and
+            // enumerating endpoints right at a track change is slow (field logs: p50 ~230 ms,
+            // p90 ~800 ms, while the audio service rebuilds Apple Music's stream). Running both
+            // together shortens every switch, and a synchronous result (cache hit / native
+            // correction) tells the pre-selection mute whether a switch is coming at all.
+            Task<ResolvedAudioFormat?>? resolution = null;
+            if (!EffectiveSettings.KeepOutputFormatFixed)
+            {
+                resolution = ResolveFormatAsync(track, cancellationToken);
+                ObserveUnawaitedFault(resolution);
+                MuteBeforeTargetSelection(resolution, pausedPlayback, correlation);
             }
 
             _logger.Info("Starting target-device selection.", correlation);
@@ -658,7 +688,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
 
             PublishStatusIfCurrent(generation, new SwitchingStatus("Resolver: Resolving format", targetDevice.FriendlyName, track, null, null, null));
             stage = TrackProcessingStage.ResolvingFormat;
-            var resolution = ResolveFormatAsync(track, cancellationToken);
+            resolution ??= ResolveFormatAsync(track, cancellationToken);
             // Cache hits and native corrections complete synchronously: inspect them before
             // muting so a known matching format has no artificial gap (issue #2). Keep pending
             // lookups silent in intro-replay mode, as requested, until their result is known.
@@ -692,7 +722,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
                 // Guessing 44.1/48 kHz caused false rate changes and album oscillation (#3/#4).
                 (resumeAttempted, _) = await ResumeIfNeededAsync(pausedPlayback, resumeAttempted,
                     targetDevice.FriendlyName, null, cancellationToken);
-                UnmuteTargetDeviceAfterProcessing(correlation);
+                await ReleaseProtectiveMuteAsync(targetDevice.Id, generation, track, correlation, cancellationToken);
                 var currentFormat = _audioEndpointController.GetCurrentDeviceFormat(targetDevice.Id);
                 var health = await VerifyPlaybackHealthAfterNoSwitchAsync(targetDevice.Id,
                     targetDevice.FriendlyName, generation, track, resolved, currentFormat, correlation, cancellationToken);
@@ -717,7 +747,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
                     targetDevice.FriendlyName,
                     failureReason,
                     CancellationToken.None);
-                UnmuteTargetDeviceAfterProcessing(correlation);
+                await ReleaseProtectiveMuteAsync(targetDevice.Id, generation, track, correlation, cancellationToken);
                 var skipHealth = await VerifyPlaybackHealthAfterNoSwitchAsync(
                     targetDevice.Id, targetDevice.FriendlyName, generation, track, resolved, decision.CurrentDeviceFormat, correlation, cancellationToken);
                 resumeAttempted = resumeAttempted || skipHealth != PlaybackHealthOutcome.Healthy;
@@ -735,7 +765,7 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
                     targetDevice.FriendlyName,
                     activeFormatNote,
                     cancellationToken);
-                UnmuteTargetDeviceAfterProcessing(correlation);
+                await ReleaseProtectiveMuteAsync(targetDevice.Id, generation, track, correlation, cancellationToken);
                 var activeHealth = await VerifyPlaybackHealthAfterNoSwitchAsync(
                     targetDevice.Id, targetDevice.FriendlyName, generation, track, resolved, decision.CurrentDeviceFormat, correlation, cancellationToken);
                 resumeAttempted = resumeAttempted || activeHealth != PlaybackHealthOutcome.Healthy;
@@ -1091,7 +1121,105 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
     }
 
     
-    private void MuteTargetDeviceForProcessing(string? deviceId, DiagnosticsLogger.LogCorrelation correlation)
+    /// <summary>
+    /// Mutes the endpoint the previous track played on the moment a new track is processed,
+    /// BEFORE target-device selection. Field logs showed the mute landing 200-400 ms (up to ~1 s)
+    /// after Apple Music had already started the new track, so its opening was heard at the old
+    /// rate and then heard again from 0:00 after the switch — the audible pre-play "leak".
+    /// Skipped when a synchronous result (cache hit / native correction) proves no switch is
+    /// needed, so matching tracks keep a gapless transition (issue #2). If target selection
+    /// later picks a different endpoint, the regular path moves the mute there.
+    /// </summary>
+    private void MuteBeforeTargetSelection(
+        Task<ResolvedAudioFormat?> resolution,
+        bool pausedPlayback,
+        DiagnosticsLogger.LogCorrelation correlation)
+    {
+        var deviceId = _lastTargetDeviceId;
+        if (deviceId is null ||
+            !EffectiveSettings.RewindAfterFormatSwitch ||
+            (!pausedPlayback && !_mediaTransportController.GetPlaybackState().IsPlaying))
+        {
+            return;
+        }
+
+        if (resolution.IsCompleted &&
+            (!resolution.IsCompletedSuccessfully || !WouldSwitchFormat(deviceId, resolution.Result)))
+        {
+            // Nothing will change on this endpoint: release a mute inherited from a superseded
+            // track now instead of after device selection and evaluation.
+            if (string.Equals(_mutedDeviceId, deviceId, StringComparison.Ordinal))
+            {
+                UnmuteTargetDeviceAfterProcessing(correlation);
+            }
+
+            return;
+        }
+
+        MuteTargetDeviceForProcessing(
+            deviceId,
+            correlation,
+            "Muted the previous target device at the track change, before device selection, to silence pre-switch playback.");
+    }
+
+    // A track the app did not see start (session attach at app launch, or a reprocess) that is
+    // already this far in has been audible all along. Below it, protect the intro as usual — the
+    // app may have attached right as the song began. Only trusted for these reasons: after a real
+    // track change GSMTC can briefly still report the previous track's position.
+    private static readonly TimeSpan JoinedMidPlayThreshold = TimeSpan.FromSeconds(5);
+
+    private bool IsJoinedMidPlay(TrackSnapshot track, out TimeSpan position)
+    {
+        position = default;
+        if (track.DetectionReason is not (TrackDetectionReasons.SessionAttached or TrackDetectionReasons.Reprocess))
+        {
+            return false;
+        }
+
+        if (_mediaTransportController.GetPlaybackState().TimelinePosition is not { } current ||
+            current < JoinedMidPlayThreshold)
+        {
+            return false;
+        }
+
+        position = current;
+        return true;
+    }
+
+    private bool WouldSwitchFormat(string deviceId, ResolvedAudioFormat? resolved)
+    {
+        if (resolved is null ||
+            resolved.Source == AudioFormatSource.TierFallback ||
+            resolved.Confidence != ResolutionConfidence.Exact)
+        {
+            // Undetermined and missing results never switch the device.
+            return false;
+        }
+
+        var currentFormat = _audioEndpointController.GetCurrentDeviceFormat(deviceId);
+        var selected = FormatSelectionPolicy.SelectBest(
+            resolved,
+            currentFormat,
+            _audioEndpointController.GetSupportedFormats(deviceId),
+            EffectiveSettings.SwitchBitDepth,
+            EffectiveSettings.DefaultBitDepth,
+            EffectiveSettings.PreferClosestSampleRateMultiple,
+            EffectiveSettings.AllowedSampleRates,
+            EffectiveSettings.AllowedBitDepths);
+        return selected is not null && selected != currentFormat;
+    }
+
+    private static void ObserveUnawaitedFault(Task task) =>
+        _ = task.ContinueWith(
+            static completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
+    private void MuteTargetDeviceForProcessing(
+        string? deviceId,
+        DiagnosticsLogger.LogCorrelation correlation,
+        string message = "Muted target device to silence pre-switch playback.")
     {
         if (deviceId is null || _mutedDeviceId is not null)
         {
@@ -1108,7 +1236,8 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
         if (_audioEndpointController.TrySetMasterMute(deviceId, true))
         {
             _mutedDeviceId = deviceId;
-            _logger.Info("Muted target device to silence pre-switch playback.", correlation);
+            _mutedSinceUtc = DateTimeOffset.UtcNow;
+            _logger.Info(message, correlation);
         }
         else
         {
@@ -1131,6 +1260,79 @@ public sealed class SwitchingCoordinator : IAsyncDisposable
         else
         {
             LogWithOptionalCorrelation(warn: true, "Could not unmute target device; will retry on the next opportunity.", correlation);
+        }
+    }
+
+    // How much of a track may render into the protective mute before a no-switch outcome replays
+    // its opening. A typical lookup (~0.3-0.7 s) stays below it; a catalog miss followed by the
+    // local-file retry (~3.5 s, seen live) does not.
+    private static readonly TimeSpan NoSwitchIntroReplayThreshold = TimeSpan.FromMilliseconds(1500);
+
+    /// <summary>
+    /// Releases the protective mute when the lookup ended without a format switch. If the track
+    /// has been rendering into that silence for a noticeable time, its opening was lost for
+    /// nothing, so replay it: wait until a restart is safe, pause, restart the recording, unmute
+    /// and play. No format changed, so pausing this healthy stream is safe (the zombie risk is
+    /// specific to a stream invalidated while dormant).
+    /// </summary>
+    private async Task ReleaseProtectiveMuteAsync(
+        string deviceId,
+        long generation,
+        TrackSnapshot track,
+        DiagnosticsLogger.LogCorrelation correlation,
+        CancellationToken cancellationToken)
+    {
+        var silencedSince = _mutedSinceUtc > track.DetectedAtUtc ? _mutedSinceUtc : track.DetectedAtUtc;
+        var silenced = DateTimeOffset.UtcNow - silencedSince;
+        if (!string.Equals(_mutedDeviceId, deviceId, StringComparison.Ordinal) ||
+            silenced < NoSwitchIntroReplayThreshold ||
+            !EffectiveSettings.RewindAfterFormatSwitch ||
+            generation != Volatile.Read(ref _currentTrackGeneration) ||
+            !_mediaTransportController.GetPlaybackState().IsPlaying)
+        {
+            UnmuteTargetDeviceAfterProcessing(correlation);
+            return;
+        }
+
+        _logger.Info(
+            $"No format switch was needed, but the track played into the protective mute for {silenced.TotalSeconds:0.0} s; replaying its opening.",
+            correlation);
+
+        var state = _mediaTransportController.GetPlaybackState();
+        var minimumRestart = _mediaTransportController.MinimumRestartPosition;
+        if (minimumRestart > TimeSpan.Zero)
+        {
+            var ready = Stopwatch.StartNew();
+            while (state.IsPlaying && state.TimelinePosition is { } position &&
+                   position < minimumRestart && ready.Elapsed < TimeSpan.FromSeconds(6))
+            {
+                await Task.Delay(FastPlaybackPollInterval, cancellationToken);
+                state = _mediaTransportController.GetPlaybackState();
+            }
+        }
+
+        if (!state.IsPlaying)
+        {
+            // The user paused meanwhile — leave it to them.
+            UnmuteTargetDeviceAfterProcessing(correlation);
+            return;
+        }
+
+        // Mark the pause as ours so a track arriving mid-replay inherits and resumes it.
+        _transportPausedByCoordinator = await _mediaTransportController.TryPauseAsync(cancellationToken);
+        if (!_transportPausedByCoordinator)
+        {
+            _logger.Info("Intro replay pause was rejected; continuing at the current position.", correlation);
+            UnmuteTargetDeviceAfterProcessing(correlation);
+            return;
+        }
+
+        await Task.Delay(ScheduleRealignSettleDelay, cancellationToken);
+        await TryRewindIntroAsync(generation, correlation, cancellationToken);
+        // Unmutes before play so the opening is audible from its first sample.
+        if (!await ResumePlaybackAfterPauseAsync(null, cancellationToken))
+        {
+            _logger.Warn("Apple Music did not resume after the intro replay pause.", correlation);
         }
     }
 

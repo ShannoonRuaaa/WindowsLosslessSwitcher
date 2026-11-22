@@ -221,13 +221,41 @@ public sealed partial class AppleMusicCatalogResolver : IFormatResolver
         var songDetail = song.Value;
         if (string.IsNullOrWhiteSpace(songDetail.EnhancedHlsUrl))
         {
-            // The catalog affirmatively says this song has no lossless manifest — durable.
-            _logger.Info($"Catalog resolver found no enhanced HLS manifest for {normalizedTrack.UniqueKey}.");
-            if (cacheKey is not null)
+            _logger.Info(
+                $"Catalog resolver found no enhanced HLS manifest for {normalizedTrack.UniqueKey} " +
+                $"(traits: {(songDetail.AudioTraits.Count == 0 ? "none" : string.Join(", ", songDetail.AudioTraits))}).");
+            if (IsLossyOnly(songDetail.AudioTraits))
             {
+                // Matched, and the catalog says there is no lossless version: Apple Music streams
+                // its AAC master, which is always 44.1 kHz. Treating this as "undetermined" kept
+                // the previous track's rate (e.g. 96 kHz) for the whole song, after holding the
+                // mute through a pointless 2.5 s local-file retry.
+                var aac = new ResolvedAudioFormat(
+                    AacStreamSampleRateHz,
+                    16,
+                    ResolutionConfidence.Exact,
+                    AudioFormatSource.CatalogManifest,
+                    $"Catalog: AAC only (no lossless version), {AacStreamSampleRateHz / 1000.0:0.###} kHz")
+                {
+                    ObservedAtUtc = DateTimeOffset.UtcNow,
+                    CatalogSongId = songDetail.Id,
+                };
+                if (cacheKey is not null)
+                {
+                    _formatCacheStore!.Store(cacheKey, aac);
+                }
+
+                return aac;
+            }
+
+            if (songDetail.AudioTraits.Count == 0 && cacheKey is not null)
+            {
+                // Nothing says this song has a lossless master — durable.
                 _formatCacheStore!.StoreNoMatch(cacheKey);
             }
 
+            // Lossless traits without a manifest URL is an inconsistent response; do not cache a
+            // negative for it.
             return null;
         }
 
@@ -235,7 +263,34 @@ public sealed partial class AppleMusicCatalogResolver : IFormatResolver
         if (string.IsNullOrWhiteSpace(manifest) ||
             !TryGetHighestLosslessVariant(manifest, out var sampleRateHz, out var bitDepth))
         {
+            if (!string.IsNullOrWhiteSpace(manifest))
+            {
+                _logger.Warn(
+                    $"Catalog resolver could not read any lossless variant from the manifest of {songDetail.Id} " +
+                    $"({normalizedTrack.UniqueKey}). Manifest excerpt: {DescribeManifestForDiagnostics(manifest)}");
+            }
+
             return null;
+        }
+
+        var description = $"Catalog manifest: {bitDepth}/{sampleRateHz / 1000.0:0.###}";
+        if (sampleRateHz <= StandardLosslessMaxSampleRateHz && HasTrait(songDetail.AudioTraits, HiResLosslessTrait))
+        {
+            // Apple only tags a song hi-res-lossless when it has a variant above 48 kHz, but the
+            // web-token enhancedHls master omits that variant for many songs (verified live
+            // 2026-11-21: a hi-res-tagged song's master listed a single ALAC group,
+            // audio-alac-stereo-48000-24, while the native app plays hi-res). Field logs: 48 of
+            // 109 hi-res songs resolved to 24/48 this way (e.g. tracks that really play at 24/96
+            // and 24/192), forcing the device below the stream's rate. The true rate is not
+            // available from this source; 96 kHz is by far the most common hi-res master, and a
+            // native-format correction overrides it per track.
+            _logger.Warn(
+                $"Catalog resolver: {songDetail.Id} ({normalizedTrack.UniqueKey}) is tagged {HiResLosslessTrait} but its manifest " +
+                $"listed nothing above {bitDepth}/{sampleRateHz}; assuming 24/{AssumedHiResSampleRateHz}. " +
+                $"Manifest excerpt: {DescribeManifestForDiagnostics(manifest)}");
+            sampleRateHz = AssumedHiResSampleRateHz;
+            bitDepth = 24;
+            description = $"Catalog: hi-res lossless (manifest rate not listed; assuming 24/{AssumedHiResSampleRateHz / 1000.0:0.###})";
         }
 
         _logger.Info(
@@ -247,7 +302,7 @@ public sealed partial class AppleMusicCatalogResolver : IFormatResolver
             bitDepth,
             ResolutionConfidence.Exact,
             AudioFormatSource.CatalogManifest,
-            $"Catalog manifest: {bitDepth}/{sampleRateHz / 1000.0:0.###}")
+            description)
         {
             ObservedAtUtc = DateTimeOffset.UtcNow,
             CatalogSongId = songDetail.Id,
@@ -466,35 +521,274 @@ public sealed partial class AppleMusicCatalogResolver : IFormatResolver
         return CatalogSongDetail.FromJson(data[0]);
     }
 
+    internal const string HiResLosslessTrait = "hi-res-lossless";
+    private const string LosslessTrait = "lossless";
+    private const int StandardLosslessMaxSampleRateHz = 48000;
+    internal const int AssumedHiResSampleRateHz = 96000;
+
+    // Apple Music's AAC (iTunes Plus) masters are 44.1 kHz.
+    internal const int AacStreamSampleRateHz = 44100;
+
+    private static bool HasTrait(IReadOnlyList<string> traits, string trait) =>
+        traits.Any(value => string.Equals(value, trait, StringComparison.OrdinalIgnoreCase));
+
+    internal static bool IsLossyOnly(IReadOnlyList<string> traits) =>
+        traits.Count > 0 && !HasTrait(traits, LosslessTrait) && !HasTrait(traits, HiResLosslessTrait);
+
+    /// <summary>
+    /// Finds the highest-resolution ALAC variant a master playlist advertises. HLS attribute
+    /// order and quoting are not fixed, and a variant's rate/depth may only be carried by its
+    /// group id (e.g. <c>audio-alac-stereo-96000-24</c>) on <c>#EXT-X-MEDIA</c> or on the
+    /// <c>AUDIO=</c> reference of an <c>#EXT-X-STREAM-INF</c>, or by the base64 JSON of the
+    /// <c>com.apple.hls.audioAssetMetadata</c> session data. The previous parser only accepted
+    /// <c>#EXT-X-MEDIA:TYPE=AUDIO</c> lines carrying both numeric attributes, and silently fell
+    /// back to a lower variant when the hi-res one was described any other way.
+    /// </summary>
     internal static bool TryGetHighestLosslessVariant(string manifest, out int sampleRateHz, out int bitDepth)
     {
-        sampleRateHz = 0;
-        bitDepth = 0;
+        var bestRate = 0;
+        var bestDepth = 0;
 
         foreach (var line in manifest.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            if (!line.StartsWith("#EXT-X-MEDIA:TYPE=AUDIO", StringComparison.Ordinal) ||
-                line.IndexOf("SAMPLE-RATE=", StringComparison.OrdinalIgnoreCase) < 0 ||
-                line.IndexOf("BIT-DEPTH=", StringComparison.OrdinalIgnoreCase) < 0)
+            if (line.StartsWith("#EXT-X-MEDIA:", StringComparison.OrdinalIgnoreCase))
             {
-                continue;
-            }
+                var attributes = ParseAttributeList(line["#EXT-X-MEDIA:".Length..]);
+                if (attributes.TryGetValue("TYPE", out var type) &&
+                    !string.Equals(type, "AUDIO", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
 
-            var sampleRate = TryParseManifestAttribute(line, "SAMPLE-RATE");
-            var depth = TryParseManifestAttribute(line, "BIT-DEPTH");
-            if (sampleRate is null || depth is null)
-            {
-                continue;
-            }
+                var rate = ParseManifestNumber(attributes, "SAMPLE-RATE");
+                var depth = ParseManifestNumber(attributes, "BIT-DEPTH");
+                if ((rate is null || depth is null) &&
+                    attributes.TryGetValue("GROUP-ID", out var groupId) &&
+                    TryParseAlacGroupId(groupId, out var groupRate, out var groupDepth))
+                {
+                    rate ??= groupRate;
+                    depth ??= groupDepth;
+                }
 
-            if (sampleRate > sampleRateHz || (sampleRate == sampleRateHz && depth > bitDepth))
+                Consider(rate, depth);
+            }
+            else if (line.StartsWith("#EXT-X-STREAM-INF:", StringComparison.OrdinalIgnoreCase))
             {
-                sampleRateHz = sampleRate.Value;
-                bitDepth = depth.Value;
+                var attributes = ParseAttributeList(line["#EXT-X-STREAM-INF:".Length..]);
+                if (attributes.TryGetValue("AUDIO", out var audioGroup) &&
+                    TryParseAlacGroupId(audioGroup, out var groupRate, out var groupDepth))
+                {
+                    Consider(groupRate, groupDepth);
+                }
+            }
+            else if (line.StartsWith("#EXT-X-SESSION-DATA:", StringComparison.OrdinalIgnoreCase))
+            {
+                var attributes = ParseAttributeList(line["#EXT-X-SESSION-DATA:".Length..]);
+                if (attributes.TryGetValue("DATA-ID", out var dataId) &&
+                    dataId.Contains("audioAssetMetadata", StringComparison.OrdinalIgnoreCase) &&
+                    attributes.TryGetValue("VALUE", out var value))
+                {
+                    foreach (var (rate, depth) in ReadAlacAssetMetadata(value))
+                    {
+                        Consider(rate, depth);
+                    }
+                }
             }
         }
 
+        sampleRateHz = bestRate;
+        bitDepth = bestDepth;
         return sampleRateHz > 0 && bitDepth > 0;
+
+        void Consider(int? rate, int? depth)
+        {
+            if (rate is not { } r || depth is not { } d || r < 8000 || r > 1_536_000 || d < 8 || d > 64)
+            {
+                return;
+            }
+
+            if (r > bestRate || (r == bestRate && d > bestDepth))
+            {
+                bestRate = r;
+                bestDepth = d;
+            }
+        }
+    }
+
+    // Matches stereo ALAC group ids such as "audio-alac-stereo-96000-24" or "alac_96000_24".
+    // Atmos, AAC, binaural and downmix groups ("audio-atmos-2768", "audio-stereo-256",
+    // "audio-stereo-binaural-256") never match, so they cannot raise the result.
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<![a-z])alac(?:[-_]stereo)?[-_](?<rate>\d{5,7})[-_](?<depth>\d{2})(?!\d)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex AlacGroupIdRegex();
+
+    private static bool TryParseAlacGroupId(string groupId, out int sampleRateHz, out int bitDepth)
+    {
+        sampleRateHz = 0;
+        bitDepth = 0;
+        var match = AlacGroupIdRegex().Match(groupId);
+        return match.Success &&
+               int.TryParse(match.Groups["rate"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out sampleRateHz) &&
+               int.TryParse(match.Groups["depth"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out bitDepth);
+    }
+
+    private static int? ParseManifestNumber(IReadOnlyDictionary<string, string> attributes, string name) =>
+        attributes.TryGetValue(name, out var raw) &&
+        int.TryParse(raw.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : null;
+
+    /// <summary>Parses an HLS attribute list (comma-separated, values optionally quoted).</summary>
+    internal static Dictionary<string, string> ParseAttributeList(string text)
+    {
+        var attributes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var index = 0;
+        while (index < text.Length)
+        {
+            var equals = text.IndexOf('=', index);
+            if (equals < 0)
+            {
+                break;
+            }
+
+            var name = text[index..equals].Trim().TrimStart(',').Trim();
+            index = equals + 1;
+            string value;
+            if (index < text.Length && text[index] == '"')
+            {
+                var closing = text.IndexOf('"', index + 1);
+                if (closing < 0)
+                {
+                    value = text[(index + 1)..];
+                    index = text.Length;
+                }
+                else
+                {
+                    value = text[(index + 1)..closing];
+                    index = closing + 1;
+                }
+            }
+            else
+            {
+                var comma = text.IndexOf(',', index);
+                var end = comma < 0 ? text.Length : comma;
+                value = text[index..end].Trim();
+                index = end;
+            }
+
+            if (index < text.Length && text[index] == ',')
+            {
+                index++;
+            }
+
+            if (name.Length > 0)
+            {
+                attributes[name] = value;
+            }
+        }
+
+        return attributes;
+    }
+
+    // The session data VALUE is base64 JSON describing each audio rendition. Only objects that
+    // identify themselves as ALAC are trusted, so Atmos/AAC metadata can never raise the result.
+    private static IEnumerable<(int Rate, int Depth)> ReadAlacAssetMetadata(string value)
+    {
+        JsonDocument? document = null;
+        try
+        {
+            var bytes = Convert.FromBase64String(PadBase64(value.Trim().Replace('-', '+').Replace('_', '/')));
+            document = JsonDocument.Parse(bytes);
+        }
+        catch
+        {
+            // Not base64 JSON (or a different shape than expected) — nothing to learn here.
+        }
+
+        if (document is null)
+        {
+            return [];
+        }
+
+        using (document)
+        {
+            var found = new List<(int Rate, int Depth)>();
+            Walk(document.RootElement, found, depth: 0);
+            return found;
+        }
+
+        static void Walk(JsonElement element, List<(int Rate, int Depth)> found, int depth)
+        {
+            if (depth > 8)
+            {
+                return;
+            }
+
+            if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                {
+                    Walk(item, found, depth + 1);
+                }
+
+                return;
+            }
+
+            if (element.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            int? rate = null;
+            int? bits = null;
+            var isAlac = false;
+            foreach (var property in element.EnumerateObject())
+            {
+                var key = property.Name.Replace("-", string.Empty).Replace("_", string.Empty).ToUpperInvariant();
+                switch (key)
+                {
+                    case "SAMPLERATE":
+                        rate = ReadNumber(property.Value);
+                        break;
+                    case "BITDEPTH":
+                        bits = ReadNumber(property.Value);
+                        break;
+                    case "AUDIOFORMATID" or "CODEC" or "CODECS" or "FORMAT":
+                        isAlac |= property.Value.ValueKind == JsonValueKind.String &&
+                                  (property.Value.GetString() ?? string.Empty).Contains("alac", StringComparison.OrdinalIgnoreCase);
+                        break;
+                    default:
+                        Walk(property.Value, found, depth + 1);
+                        break;
+                }
+            }
+
+            if (isAlac && rate is { } r && bits is { } b)
+            {
+                found.Add((r, b));
+            }
+        }
+
+        static int? ReadNumber(JsonElement value) =>
+            value.ValueKind switch
+            {
+                JsonValueKind.Number when value.TryGetInt32(out var number) => number,
+                JsonValueKind.String when int.TryParse(value.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) => parsed,
+                _ => null,
+            };
+    }
+
+    // Lines that describe variants, with URIs (long, signed, useless for diagnosis) removed.
+    internal static string DescribeManifestForDiagnostics(string manifest)
+    {
+        var lines = manifest
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => line.StartsWith("#EXT-X-MEDIA", StringComparison.OrdinalIgnoreCase) ||
+                           line.StartsWith("#EXT-X-STREAM-INF", StringComparison.OrdinalIgnoreCase) ||
+                           line.StartsWith("#EXT-X-SESSION-DATA", StringComparison.OrdinalIgnoreCase))
+            .Select(line => System.Text.RegularExpressions.Regex.Replace(line, "URI=\"[^\"]*\"", "URI=…"))
+            .Select(line => line.Length > 300 ? line[..300] + "…" : line);
+        var text = string.Join(" | ", lines);
+        return text.Length > 2000 ? text[..2000] + "…" : text;
     }
 
     private async Task<string?> FetchStringAsync(
@@ -566,17 +860,6 @@ public sealed partial class AppleMusicCatalogResolver : IFormatResolver
     {
         var remainder = value.Length % 4;
         return remainder == 0 ? value : value.PadRight(value.Length + (4 - remainder), '=');
-    }
-
-    private static int? TryParseManifestAttribute(string line, string name)
-    {
-        var match = System.Text.RegularExpressions.Regex.Match(
-            line,
-            $"{name}=(?<value>\\d+)",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        return match.Success && int.TryParse(match.Groups["value"].Value, out var value)
-            ? value
-            : null;
     }
 
     private static int ScoreMatch(TrackSnapshot track, string title, string artist, string album)
